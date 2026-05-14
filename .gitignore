@@ -1,6 +1,32 @@
 # /data/covset/datasets
 # /data/knapsack/datasets
 
-# /solver/v1ld_solver_reparam.py
-# /solver/v1ld_solver copy.py
+# GNN (work in progress, separate branch)
+/gnn
 
+# Figures générées (artefacts, recréables)
+/figures
+/figures_cpp
+/figures_general_v1
+/figures_general_v1_cpp
+
+# Système macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Binaires compilés (platform-specific)
+*.so
+
+# Artefacts de build C++
+solver_cpp2/build/
+solver_cpp/build/
+
+# Articles et présentations (PDFs, non-source)
+/articles
+/beamer

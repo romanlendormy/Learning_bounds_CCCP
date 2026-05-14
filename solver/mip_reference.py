@@ -71,7 +71,7 @@ def solve_mip_exact(instance: CCSPInstance, time_limit: int = 300) -> Tuple[floa
                 >= b[i, j] * z[i]
             )
 
-    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=time_limit)
+    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=time_limit, gapRel=0, gapAbs=0)
     prob.solve(solver)
 
     obj_val = pulp.value(prob.objective)
