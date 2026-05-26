@@ -1,14 +1,5 @@
-# /data/covset/datasets
-# /data/knapsack/datasets
-
-# GNN (work in progress, separate branch)
-/gnn
-
 # Figures générées (artefacts, recréables)
 /figures
-/figures_cpp
-/figures_general_v1
-/figures_general_v1_cpp
 
 # Système macOS
 .DS_Store
@@ -23,10 +14,15 @@ __pycache__/
 # Binaires compilés (platform-specific)
 *.so
 
-# Artefacts de build C++
-solver_cpp2/build/
-solver_cpp/build/
+# Artefacts de build C++ (tous les dossiers build/)
+**/build/
 
 # Articles et présentations (PDFs, non-source)
 /articles
 /beamer
+
+# Notebooks de benchmark (recréables, non versionnés)
+benchmark_*.ipynb
+
+# Mémoire Claude Code (locale)
+.claude/
