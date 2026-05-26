@@ -1,6 +1,28 @@
-# /data/covset/datasets
-# /data/knapsack/datasets
+# Figures générées (artefacts, recréables)
+/figures
 
-# /solver/v1ld_solver_reparam.py
-# /solver/v1ld_solver copy.py
+# Système macOS
+.DS_Store
+**/.DS_Store
 
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Binaires compilés (platform-specific)
+*.so
+
+# Artefacts de build C++ (tous les dossiers build/)
+**/build/
+
+# Articles et présentations (PDFs, non-source)
+/articles
+/beamer
+
+# Notebooks de benchmark (recréables, non versionnés)
+benchmark_*.ipynb
+
+# Mémoire Claude Code (locale)
+.claude/
