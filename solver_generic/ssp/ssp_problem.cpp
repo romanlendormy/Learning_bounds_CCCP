@@ -33,7 +33,7 @@ SSPProblem::SSPProblem(int n, int m, int k, int Q,
         product_auts_.push_back(build_product_automaton(scen));
 }
 
-// ── encode / decode ───────────────────────────────────────────────────────────
+// ── encode / decode in base Q ──────────────────────────────────────────────────
 
 int SSPProblem::encode(const Vec1i& qs) const {
     int s = 0;

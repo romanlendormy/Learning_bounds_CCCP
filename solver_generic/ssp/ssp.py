@@ -84,6 +84,28 @@ def load_ssp_instances(filepath: str,
     return instances
 
 
+def ssp_to_cpp_v1cld(inst: SSPInstance):
+    """
+    Convertit un SSPInstance en v1ld_generic_cpp.SSPCLDProblem (C++).
+
+    Décomposition CLD : résolution séparée par automate (n_constraints = k).
+
+    Exemple :
+        import v1ld_generic_cpp as cpp
+        from solver_generic.ssp import load_ssp_instances, ssp_to_cpp_v1cld
+
+        insts = load_ssp_instances('...')
+        prob  = ssp_to_cpp_v1cld(insts[0])
+        res   = cpp.solve_v1cld(prob, T=500)
+    """
+    import v1ld_generic_cpp as cpp
+    delta_arr = np.array(
+        [[a["delta"]     for a in scen] for scen in inst.automata], dtype=np.int32)
+    acc_arr   = np.array(
+        [[a["accepting"] for a in scen] for scen in inst.automata], dtype=np.uint8)
+    return cpp.SSPCLDProblem(inst.profit, inst.p, inst.epsilon, delta_arr, acc_arr)
+
+
 def ssp_to_cpp(inst: SSPInstance):
     """
     Convertit un SSPInstance en v1ld_generic_cpp.SSPProblem (C++).

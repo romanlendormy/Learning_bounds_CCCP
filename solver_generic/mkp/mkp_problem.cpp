@@ -1,16 +1,23 @@
 /*
- * mkp_problem.cpp — Implémentation de MKPProblem.
+ * mkp_problem.cpp — MKPProblem: solve_theta (greedy) + solve_zeta (CP-SAT).
  *
- * solve_zeta : B&B exact identique à solve_zeta_i_mkp_bb (mkp_subproblems.hpp)
- * mais intégré ici pour éviter la dépendance sur solver_mkp/.
+ * solve_zeta résout le sous-problème multi-dimensionnel 0-1 knapsack exactement
+ * via OR-Tools CP-SAT. Les coefficients float sont convertis en int64 avec
+ * SCALE = 1000 (3 décimales de précision). Pas de contrainte Big-M : les
+ * contraintes de capacité sont posées directement.
+ *
+ * Dépendance : brew install or-tools  →  find_package(ortools CONFIG REQUIRED)
  */
 
 #include "mkp_problem.hpp"
+#include "ortools/sat/cp_model.h"
+#include "ortools/sat/sat_parameters.pb.h"
 
-#include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <vector>
+
+namespace sat = operations_research::sat;
+using operations_research::Domain;
 
 // ── Constructeur ─────────────────────────────────────────────────────────────
 
@@ -34,120 +41,63 @@ std::pair<double, Vec1d> MKPProblem::solve_theta(const Vec1d& cost) const
     return {val, std::move(x)};
 }
 
-// ── ζ_i : B&B multi-contraintes exact ────────────────────────────────────────
-
-namespace {
-
-struct MkpBnB {
-    const int*    active;
-    const double* cost;
-    const double* const* A_rows;
-    int na, m;
-    double best_val;
-    std::vector<int8_t> x_bits, best_x_bits;
-    std::vector<std::vector<int>> sort_j;
-
-    double lp_j(int j, int idx, double cap_j, double val) const {
-        double v = val;
-        for (int ki : sort_j[j]) {
-            if (ki < idx) continue;
-            int k    = active[ki];
-            double a = A_rows[j][k];
-            if      (a < 1e-12)        { v += cost[k]; }
-            else if (a <= cap_j+1e-12) { v += cost[k]; cap_j -= a; }
-            else                       { v += cost[k] * cap_j / a; break; }
-        }
-        return v;
-    }
-
-    double upper_bound(int idx, const double* rem_b, double val) const {
-        double ub = 1e30;
-        for (int j = 0; j < m; ++j) {
-            double lj = lp_j(j, idx, rem_b[j], val);
-            if (lj < ub) ub = lj;
-        }
-        return ub;
-    }
-
-    void run(int idx, double* rem_b, double val) {
-        if (idx == na) {
-            if (val > best_val + 1e-9) { best_val = val; best_x_bits = x_bits; }
-            return;
-        }
-        if (upper_bound(idx, rem_b, val) <= best_val + 1e-9) return;
-        int k = active[idx];
-        bool feasible = true;
-        for (int j = 0; j < m; ++j)
-            if (A_rows[j][k] > rem_b[j] + 1e-12) { feasible = false; break; }
-        if (feasible) {
-            for (int j = 0; j < m; ++j) rem_b[j] -= A_rows[j][k];
-            x_bits[idx] = 1;
-            run(idx + 1, rem_b, val + cost[k]);
-            x_bits[idx] = 0;
-            for (int j = 0; j < m; ++j) rem_b[j] += A_rows[j][k];
-        }
-        run(idx + 1, rem_b, val);
-    }
-};
-
-} // anonymous namespace
+// ── ζ_i : CP-SAT (0-1 knapsack multi-dimensionnel) ───────────────────────────
 
 std::pair<double, Vec1d> MKPProblem::solve_zeta(int i, const Vec1d& cost) const
 {
-    Vec1d  x_out(n_, 0.0);
-    double val_free = 0.0;
     const Vec2d& Ai = A_[i];
     const Vec1d& bi = b_[i];
 
-    std::vector<int> active;
-    active.reserve(n_);
-    for (int k = 0; k < n_; ++k) {
-        if (cost[k] <= 0.0) continue;
-        bool free_item = true;
-        for (int j = 0; j < m_; ++j)
-            if (Ai[j][k] >= 1e-9) { free_item = false; break; }
-        if (free_item) { x_out[k] = 1.0; val_free += cost[k]; }
-        else           { active.push_back(k); }
-    }
-    if (active.empty()) return {val_free, std::move(x_out)};
+    // Float → int64 : SCALE = 1000 préserve 3 décimales.
+    // Si les coefficients A et b sont des entiers, le résultat est exact.
+    constexpr int64_t SCALE = 1000;
 
-    // Tri par ratio surrogate décroissant
-    std::sort(active.begin(), active.end(), [&](int a, int b_idx) {
-        double wa = 0.0, wb = 0.0;
-        for (int j = 0; j < m_; ++j) {
-            if (bi[j] > 1e-12) { wa += Ai[j][a]/bi[j]; wb += Ai[j][b_idx]/bi[j]; }
-        }
-        double ra = (wa > 1e-12) ? cost[a]/wa   : 1e18;
-        double rb = (wb > 1e-12) ? cost[b_idx]/wb : 1e18;
-        return ra > rb;
-    });
+    sat::CpModelBuilder model;
 
-    int na = static_cast<int>(active.size());
-    std::vector<std::vector<int>> sort_j(m_, std::vector<int>(na));
+    // Variables binaires x_k ∈ {0, 1}
+    std::vector<sat::BoolVar> x(n_);
+    for (int k = 0; k < n_; ++k)
+        x[k] = model.NewBoolVar();
+
+    // Contraintes de capacité : ∑_k A[i][j][k] * x_k ≤ b[i][j],  ∀ j = 0..m-1
     for (int j = 0; j < m_; ++j) {
-        std::iota(sort_j[j].begin(), sort_j[j].end(), 0);
-        std::sort(sort_j[j].begin(), sort_j[j].end(), [&](int a, int b_idx) {
-            int ka = active[a], kb = active[b_idx];
-            double ra = (Ai[j][ka] > 1e-12) ? cost[ka]/Ai[j][ka] : 1e18;
-            double rb = (Ai[j][kb] > 1e-12) ? cost[kb]/Ai[j][kb] : 1e18;
-            return ra > rb;
-        });
+        std::vector<int64_t> w(n_);
+        for (int k = 0; k < n_; ++k)
+            w[k] = static_cast<int64_t>(std::llround(Ai[j][k] * SCALE));
+        // floor sur la capacité : conservatif, garantit la faisabilité originale
+        int64_t cap = static_cast<int64_t>(std::floor(bi[j] * SCALE));
+        model.AddLinearConstraint(
+            sat::LinearExpr::WeightedSum(x, w),
+            Domain(0, cap)
+        );
     }
-    std::vector<const double*> A_ptrs(m_);
-    for (int j = 0; j < m_; ++j) A_ptrs[j] = Ai[j].data();
 
-    MkpBnB bb;
-    bb.active  = active.data(); bb.cost = cost.data();
-    bb.A_rows  = A_ptrs.data(); bb.na = na; bb.m = m_;
-    bb.best_val = val_free;
-    bb.x_bits.assign(na, 0); bb.best_x_bits.assign(na, 0);
-    bb.sort_j = std::move(sort_j);
+    // Objectif : max ∑_k cost[k] * x_k
+    std::vector<int64_t> profits(n_);
+    for (int k = 0; k < n_; ++k)
+        profits[k] = static_cast<int64_t>(std::llround(cost[k] * SCALE));
+    model.Maximize(sat::LinearExpr::WeightedSum(x, profits));
 
-    std::vector<double> rem_b(bi.begin(), bi.end());
-    bb.run(0, rem_b.data(), val_free);
+    // Résolution — mono-thread, silencieux (sous-problème appelé N fois)
+    sat::SatParameters params;
+    params.set_log_search_progress(false);
+    params.set_num_workers(1);
+    const sat::CpSolverResponse resp =
+        sat::SolveWithParameters(model.Build(), params);
 
-    for (int ki = 0; ki < na; ++ki)
-        if (bb.best_x_bits[ki]) x_out[active[ki]] = 1.0;
+    Vec1d x_out(n_, 0.0);
+    double val = 0.0;
+    if (resp.status() == sat::CpSolverStatus::OPTIMAL ||
+        resp.status() == sat::CpSolverStatus::FEASIBLE) {
+        for (int k = 0; k < n_; ++k) {
+            if (sat::SolutionBooleanValue(resp, x[k])) {
+                x_out[k] = 1.0;
+                val      += cost[k];
+            }
+        }
+    }
+    // Si INFEASIBLE (ne devrait pas arriver : x=0 toujours faisable),
+    // on retourne la solution nulle par défaut.
 
-    return {bb.best_val, std::move(x_out)};
+    return {val, std::move(x_out)};
 }
