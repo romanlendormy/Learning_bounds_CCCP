@@ -39,8 +39,10 @@ target_compile_options(gecode_cpp PRIVATE -O3 -march=native)
 
 # ── Copie du .so dans la racine du projet ─────────────────────────────────────
 add_custom_command(TARGET gecode_cpp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:gecode_cpp>
-        ${CMAKE_CURRENT_SOURCE_DIR}/../$<TARGET_FILE_NAME:gecode_cpp>
-    COMMENT "Copie gecode_cpp dans la racine"
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/$<TARGET_FILE_NAME:gecode_cpp>
+    COMMENT "Copie gecode_cpp dans lib/"
 )

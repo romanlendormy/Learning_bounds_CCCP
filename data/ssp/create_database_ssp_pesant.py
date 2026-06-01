@@ -10,15 +10,24 @@ sous la contrainte :
 
     P( pour tout j : l'automate j accepte x ) ≥ 1 − ε
 
-Chaque scénario est constitué de k automates déterministes finis (DFA) :
-  • Q états  {0, ..., Q-1}
-  • état initial : 0
-  • transitions δ : Q × m → {0,...,Q-1} ∪ {-1 (inactive)}
-      - (q, a) actif avec proba p_trans (défaut 0.70)
-      - si actif : état d'arrivée tiré uniformément dans {0,...,Q-1}
-      - sinon    : δ[q][a] = -1  (transition morte → rejet immédiat)
-  • états acceptants : chaque état marqué terminal indépendamment
-    avec proba p_acc (défaut 0.50)
+Deux modes de génération disponibles :
+
+Mode Pesant (défaut)
+  Chaque scénario est constitué de k automates DFA tirés indépendamment :
+  • transitions δ : Q × m → {0,...,Q-1} ∪ {-1}
+      - (q, a) actif avec proba p_trans → état d'arrivée ~ Unif({0,...,Q-1})
+      - sinon δ[q][a] = -1  (transition morte → rejet immédiat)
+  • états acceptants : Bernoulli(p_acc) par état
+
+Mode base corrélé (--base_mode)
+  Pour chaque épisode, on génère k automates de BASE complètement définis :
+  • toutes les transitions actives (p_trans = 1), destination ~ Unif({0,...,Q-1})
+  • états acceptants : Bernoulli(p_acc) par état — FIXÉS pour tout l'épisode
+  Puis pour chaque scénario, on PERTURBE chaque automate de base :
+  • chaque transition (q, a) est conservée avec proba p_keep, sinon mise à -1
+  • les états acceptants restent identiques à ceux de l'automate de base
+  Ce mode induit une corrélation entre scénarios (structure partagée) tout en
+  gardant une variabilité contrôlée par p_keep.
 
 La matrice de profits (n × m, entiers dans [0, 100]) est DÉTERMINISTE
 (identique pour tous les scénarios d'un même épisode).
@@ -138,6 +147,33 @@ def generate_scenario(k: int, Q: int, m: int, n: int,
 
 
 # ---------------------------------------------------------------------------
+# Mode base corrélé : automate de base + perturbation par scénario
+# ---------------------------------------------------------------------------
+
+def generate_base_automaton(Q: int, m: int, p_acc: float,
+                             rng: np.random.Generator) -> dict:
+    """Génère un automate de base : toutes les transitions définies (p_trans=1),
+    états acceptants tirés Bernoulli(p_acc).
+
+    Retourne {delta: (Q,m) int array, accepting: (Q,) bool array}.
+    """
+    delta = rng.integers(0, Q, size=(Q, m))   # destination ~ Unif, toutes actives
+    accepting = rng.random(Q) < p_acc
+    return {"delta": delta, "accepting": accepting}
+
+
+def perturb_automaton(base_aut: dict, p_keep: float,
+                      rng: np.random.Generator) -> dict:
+    """Retourne une copie de l'automate où chaque transition est conservée
+    avec proba p_keep et mise à -1 sinon.  Les états acceptants sont inchangés.
+    """
+    delta = base_aut["delta"].copy()
+    dead_mask = rng.random(delta.shape) >= p_keep   # True = à supprimer
+    delta[dead_mask] = -1
+    return {"delta": delta, "accepting": base_aut["accepting"].copy()}
+
+
+# ---------------------------------------------------------------------------
 # Construction d'une ligne CSV
 # ---------------------------------------------------------------------------
 
@@ -166,27 +202,43 @@ def generate_file(n: int, m: int, k: int, Q: int,
                   p_trans: float, p_acc: float,
                   seed_base: int,
                   output_dir: str,
-                  ensure_feasible: bool = True) -> str:
+                  ensure_feasible: bool = True,
+                  base_mode: bool = False,
+                  p_keep: float = 0.7) -> str:
     """Génère un fichier CSV pour une taille N donnée (n_reps épisodes × N scénarios).
+
+    base_mode=False : mode Pesant — chaque automate tiré indépendamment (p_trans, p_acc).
+    base_mode=True  : mode base corrélé — k automates de base par épisode (p_acc),
+                      puis chaque scénario perturbe chaque base (p_keep).
 
     Retourne le chemin du fichier créé.
     """
     os.makedirs(output_dir, exist_ok=True)
-    fname = f"ccsp-pesant-n{n}-m{m}-k{k}-Q{Q}-S{N}.txt"
+    if base_mode:
+        fname = f"ccsp-pesant-n{n}-m{m}-k{k}-Q{Q}-S{N}-base-pk{p_keep:.2f}.txt"
+    else:
+        fname = f"ccsp-pesant-n{n}-m{m}-k{k}-Q{Q}-S{N}.txt"
     fpath = os.path.join(output_dir, fname)
 
     total_lines = 0
     with open(fpath, "w") as f:
         for ep in range(n_reps):
-            # Graine reproductible : épisode + taille séparés
             rng = np.random.default_rng(seed_base + ep * 100_000 + N)
 
-            # Matrice de profits : DÉTERMINISTE pour cet épisode (même pour tous les scénarios)
-            profit = rng.integers(0, 101, size=(n, m))  # entiers dans [0, 100]
+            profit = rng.integers(0, 101, size=(n, m))
+
+            if base_mode:
+                # Générer les k automates de base pour cet épisode
+                base_automata = [generate_base_automaton(Q, m, p_acc, rng)
+                                 for _ in range(k)]
 
             for scen in range(N):
-                automata = generate_scenario(k, Q, m, n, p_trans, p_acc, rng,
-                                             ensure_feasible=ensure_feasible)
+                if base_mode:
+                    automata = [perturb_automaton(base, p_keep, rng)
+                                for base in base_automata]
+                else:
+                    automata = generate_scenario(k, Q, m, n, p_trans, p_acc, rng,
+                                                 ensure_feasible=ensure_feasible)
                 data = scenario_to_csv_values(profit, automata)
                 header = [ep, scen, n, m, k, Q]
                 f.write(",".join(map(str, header + data)) + "\n")
@@ -222,7 +274,11 @@ def main():
     parser.add_argument("--p_acc",   type=float, default=0.50,
                         help="Probabilité qu'un état soit acceptant")
     parser.add_argument("--no_feasibility_check", action="store_true",
-                        help="Désactive le re-tirage des automates trivialement infaisables")
+                        help="Désactive le re-tirage des automates trivialement infaisables (mode Pesant)")
+    parser.add_argument("--base_mode", action="store_true",
+                        help="Mode base corrélé : automates de base par épisode + perturbation par scénario")
+    parser.add_argument("--p_keep",  type=float, default=0.70,
+                        help="(base_mode) Probabilité de conserver chaque transition de l'automate de base")
     parser.add_argument("--output_dir", default="data/ssp/datasets",
                         help="Dossier de sortie")
     parser.add_argument("--seed",    type=int, default=42,
@@ -233,9 +289,11 @@ def main():
 
     print("\n=== Générateur CCSSP — Pesant (2004) ===")
     print(f"  n={args.n}, m={args.m}, k={args.k}, Q={args.Q}")
-    print(f"  p_trans={args.p_trans}, p_acc={args.p_acc}")
+    if args.base_mode:
+        print(f"  MODE : base corrélé  (p_acc={args.p_acc}, p_keep={args.p_keep})")
+    else:
+        print(f"  MODE : Pesant  (p_trans={args.p_trans}, p_acc={args.p_acc}, ensure_feasible={ensure_feasible})")
     print(f"  N_sizes={args.N_sizes}, n_reps={args.n_reps}, seed={args.seed}")
-    print(f"  ensure_feasible={ensure_feasible}")
     line_size = 6 + args.n * args.m + args.k * args.Q * (args.m + 1)
     print(f"  Taille d'une ligne : {line_size} valeurs\n")
 
@@ -247,6 +305,8 @@ def main():
             seed_base=args.seed,
             output_dir=args.output_dir,
             ensure_feasible=ensure_feasible,
+            base_mode=args.base_mode,
+            p_keep=args.p_keep,
         )
 
     print("\n=== Terminé ===")

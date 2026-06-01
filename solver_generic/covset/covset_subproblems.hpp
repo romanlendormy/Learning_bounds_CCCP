@@ -44,7 +44,7 @@ inline std::pair<double, Vec1d> solve_theta_covering(const Vec1d& cost) {
 //      de coût maximal (= perte minimale, car cost[k] <= 0 à ce stade)
 //
 // Hypothèse : b_j ∈ {0,1}. Ajouter un seul item couvrant suffit.
-inline std::pair<Vec1d, double> _solve_single_covering_max(
+inline std::pair<double, Vec1d> _solve_single_covering_max(
     const Vec1d& cost_j,
     const Vec1d& A_row,
     double       b_j
@@ -56,11 +56,11 @@ inline std::pair<Vec1d, double> _solve_single_covering_max(
     for (int k = 0; k < n; ++k)
         if (cost_j[k] > 0.0) { x[k] = 1.0; val += cost_j[k]; }
 
-    if (b_j < 0.5) return {x, val};
+    if (b_j < 0.5) return {val, x};
 
     double Ax = 0.0;
     for (int k = 0; k < n; ++k) Ax += A_row[k] * x[k];
-    if (Ax >= b_j - 1e-9) return {x, val};
+    if (Ax >= b_j - 1e-9) return {val, x};
 
     // Trouver l'item couvrant non sélectionné de coût maximal (perte minimale)
     int    k_star    = -1;
@@ -72,10 +72,10 @@ inline std::pair<Vec1d, double> _solve_single_covering_max(
         }
     }
     if (k_star < 0)
-        return {x, -std::numeric_limits<double>::infinity()};  // infaisable
+        return {-std::numeric_limits<double>::infinity(), x};  // infaisable
 
     x[k_star] = 1.0;
-    return {x, val + best_cost};
+    return {val + best_cost, x};
 }
 
 

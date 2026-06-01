@@ -25,7 +25,7 @@ public:
     std::pair<double, Vec1d> solve_theta(const Vec1d& cost) const override;
     std::pair<double, Vec1d> solve_zeta(int i, const Vec1d& cost) const override;
 
-private:
+protected:
     int    n_, m_, N_;
     double epsilon_;
     Vec1d  c_, p_;

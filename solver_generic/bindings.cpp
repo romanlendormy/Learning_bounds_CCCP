@@ -20,8 +20,11 @@
 #include "v1cld_base.hpp"
 #include "v1cld_solver.hpp"
 #include "mkp_problem.hpp"
+#include "mkp_problem_bnb.hpp"
+#include "mkp_problem_lp.hpp"
 #include "mkp_cld_problem.hpp"
 #include "ssp_problem.hpp"
+#include "ssp_cld_problem.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -157,6 +160,44 @@ Args:
         py::arg("profit"), py::arg("p"), py::arg("epsilon"),
         py::arg("delta"), py::arg("accepting"));
 
+    // ── MKPProblemBnB (variante B&B pour benchmark) ───────────────────────────
+    py::class_<MKPProblemBnB, MKPProblem>(m, "MKPProblemBnB",
+        "Variante B&B de MKPProblem — solve_zeta par Branch-and-Bound exact.")
+        .def(py::init([](
+            py::array_t<double> c_arr,
+            py::array_t<double> p_arr,
+            py::array_t<double> A_arr,
+            py::array_t<double> b_arr,
+            double epsilon)
+        {
+            return new MKPProblemBnB(
+                to_vec1d(c_arr), to_vec1d(p_arr),
+                to_vec3d(A_arr), to_vec2d(b_arr),
+                epsilon
+            );
+        }),
+        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
+        py::arg("epsilon"));
+
+    // ── MKPProblemLP (variante LP-relax pour benchmark) ──────────────────────
+    py::class_<MKPProblemLP, MKPProblem>(m, "MKPProblemLP",
+        "Variante LP-relax de MKPProblem — solve_zeta par LP fractionnaire 1D (min sur j).")
+        .def(py::init([](
+            py::array_t<double> c_arr,
+            py::array_t<double> p_arr,
+            py::array_t<double> A_arr,
+            py::array_t<double> b_arr,
+            double epsilon)
+        {
+            return new MKPProblemLP(
+                to_vec1d(c_arr), to_vec1d(p_arr),
+                to_vec3d(A_arr), to_vec2d(b_arr),
+                epsilon
+            );
+        }),
+        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
+        py::arg("epsilon"));
+
     // ── MKPCLDProblem ─────────────────────────────────────────────────────────
     py::class_<V1CLDProblem>(m, "V1CLDProblem")
         .def("n_vars",         &V1CLDProblem::n_vars)
@@ -241,6 +282,67 @@ Args:
         py::arg("lambda_init")  = py::none(),
         "Solveur v1CLD générique. Retourne v1CLD_star, convergence, times_s, "
         "gnorm_history, z_changes, solve_time_s, iterations_run, lambda_star.");
+
+    // ── SSPCLDProblem ─────────────────────────────────────────────────────────
+    py::class_<SSPCLDProblem, V1CLDProblem>(m, "SSPCLDProblem",
+        R"doc(
+Problème v1CLD pour le CCSSP à contraintes automates (décomposition par automate).
+
+n_constraints() = k — un sous-problème ζ_{i,j} par automate j du scénario i.
+
+Args:
+    profit    : (n, m)       matrice de profits déterministe
+    p         : (N,)         probabilités des scénarios
+    epsilon   : niveau de risque ε
+    delta     : (N, k, Q, m) int32 — tables de transition (-1 = mort)
+    accepting : (N, k, Q)    uint8  — états acceptants (0/1)
+)doc")
+        .def(py::init([](
+            py::array_t<double>  profit_arr,
+            py::array_t<double>  p_arr,
+            double               epsilon,
+            py::array_t<int32_t> delta_arr,
+            py::array_t<uint8_t> acc_arr)
+        {
+            auto profit_buf = profit_arr.unchecked<2>();
+            auto p_buf      = p_arr.unchecked<1>();
+            auto delta_buf  = delta_arr.unchecked<4>();
+            auto acc_buf    = acc_arr.unchecked<3>();
+
+            int n  = (int)profit_buf.shape(0);
+            int mv = (int)profit_buf.shape(1);
+            int N  = (int)p_buf.shape(0);
+            int k  = (int)delta_buf.shape(1);
+            int Q  = (int)delta_buf.shape(2);
+
+            Vec1d profit(n * mv);
+            for (int t = 0; t < n; ++t)
+                for (int a = 0; a < mv; ++a)
+                    profit[t * mv + a] = profit_buf(t, a);
+
+            Vec1d p(N);
+            for (int i = 0; i < N; ++i) p[i] = p_buf(i);
+
+            std::vector<SSPScenario> scenarios(N);
+            for (int i = 0; i < N; ++i) {
+                scenarios[i].automata.resize(k);
+                for (int j = 0; j < k; ++j) {
+                    scenarios[i].automata[j].delta.assign(Q, Vec1i(mv));
+                    scenarios[i].automata[j].accepting.resize(Q);
+                    for (int q = 0; q < Q; ++q) {
+                        scenarios[i].automata[j].accepting[q] = (acc_buf(i,j,q) != 0);
+                        for (int a = 0; a < mv; ++a)
+                            scenarios[i].automata[j].delta[q][a] = delta_buf(i,j,q,a);
+                    }
+                }
+            }
+
+            return new SSPCLDProblem(n, mv, k, Q,
+                                     std::move(profit), std::move(p), epsilon,
+                                     std::move(scenarios));
+        }),
+        py::arg("profit"), py::arg("p"), py::arg("epsilon"),
+        py::arg("delta"), py::arg("accepting"));
 
     // ── solve_v1ld ────────────────────────────────────────────────────────────
     m.def("solve_v1ld",
