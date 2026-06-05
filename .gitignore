@@ -33,3 +33,15 @@ solver_swann_darius.cpp
 # Datasets volumineux (recréables via les scripts de génération)
 data/knapsack/datasets-song-github
 data/knapsack/datasets-pisinger/
+data/knapsack/pisinger
+
+solver_generic/build_cc/
+solver_bab/build/
+
+logs/
+
+results/
+
+external/
+
+*.sh

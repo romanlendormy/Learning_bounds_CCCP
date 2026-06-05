@@ -9,21 +9,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew" "/usr/local")
 find_package(ortools CONFIG REQUIRED)
 
-# ── Python (conda 3.11) ───────────────────────────────────────────────────────
-set(PYTHON_EXECUTABLE
-    "/Users/roman.lendormy/opt/miniconda3/bin/python"
-    CACHE FILEPATH "" FORCE
-)
-set(PYTHON_INCLUDE_DIR
-    "/Users/roman.lendormy/opt/miniconda3/include/python3.11"
-    CACHE PATH "" FORCE
-)
+# ── Python (chemins par défaut macOS ; surchargeable via -D sur autre plateforme) ──
+if(NOT DEFINED PYTHON_EXECUTABLE)
+    set(PYTHON_EXECUTABLE
+        "/Users/roman.lendormy/opt/miniconda3/bin/python"
+        CACHE FILEPATH "" FORCE
+    )
+endif()
+if(NOT DEFINED PYTHON_INCLUDE_DIR)
+    set(PYTHON_INCLUDE_DIR
+        "/Users/roman.lendormy/opt/miniconda3/include/python3.11"
+        CACHE PATH "" FORCE
+    )
+endif()
 
-# ── pybind11 ──────────────────────────────────────────────────────────────────
-set(pybind11_DIR
-    "/Users/roman.lendormy/opt/miniconda3/lib/python3.11/site-packages/pybind11/share/cmake/pybind11"
-)
-find_package(pybind11 CONFIG REQUIRED)
+# ── pybind11 (optionnel : nécessaire uniquement pour le module Python) ─────────
+if(NOT DEFINED pybind11_DIR)
+    set(pybind11_DIR
+        "/Users/roman.lendormy/opt/miniconda3/lib/python3.11/site-packages/pybind11/share/cmake/pybind11"
+    )
+endif()
+find_package(pybind11 CONFIG QUIET)
 
 # ── Bibliothèque statique : corps générique + problèmes concrets ──────────────
 add_library(v1ld_generic_core STATIC
@@ -47,17 +53,21 @@ target_include_directories(v1ld_generic_core PUBLIC
 target_compile_options(v1ld_generic_core PRIVATE -O3 -march=native)
 target_link_libraries(v1ld_generic_core PUBLIC ortools::ortools)
 
-# ── Module Python v1LD générique ──────────────────────────────────────────────
-pybind11_add_module(v1ld_generic_cpp bindings.cpp)
-target_link_libraries(v1ld_generic_cpp PRIVATE v1ld_generic_core)
-target_compile_options(v1ld_generic_cpp PRIVATE -O3 -march=native)
+# ── Module Python v1LD générique (uniquement si pybind11 est disponible) ──────
+if(pybind11_FOUND)
+    pybind11_add_module(v1ld_generic_cpp bindings.cpp)
+    target_link_libraries(v1ld_generic_cpp PRIVATE v1ld_generic_core)
+    target_compile_options(v1ld_generic_cpp PRIVATE -O3 -march=native)
 
-add_custom_command(TARGET v1ld_generic_cpp POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
-    COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:v1ld_generic_cpp>
-        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/$<TARGET_FILE_NAME:v1ld_generic_cpp>
-    COMMENT "Copie v1ld_generic_cpp dans lib/"
-)
+    add_custom_command(TARGET v1ld_generic_cpp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/../lib
+        COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE:v1ld_generic_cpp>
+            ${CMAKE_CURRENT_SOURCE_DIR}/../lib/$<TARGET_FILE_NAME:v1ld_generic_cpp>
+        COMMENT "Copie v1ld_generic_cpp dans lib/"
+    )
+else()
+    message(STATUS "pybind11 non trouvé — module Python ignoré (seule libv1ld_generic_core.a sera compilée)")
+endif()
 

@@ -22,6 +22,7 @@
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <tuple>
 
 // ── Knapsack glouton ──────────────────────────────────────────────────────────
 // min Σ p_i z_i δ_i  s.c.  Σ p_i z_i ≥ 1−ε,  z ∈ {0,1}^N

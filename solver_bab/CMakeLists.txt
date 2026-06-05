@@ -5,12 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── OR-Tools (nécessaire pour MKPProblem / CP-SAT dans v1ld_generic_core) ─────
-list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew" "/usr/local")
+list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew" "/usr/local")  # macOS ; ignoré ailleurs
 find_package(ortools CONFIG REQUIRED)
 
 # ── Bibliothèque générique pré-compilée (solver_generic) ─────────────────────
 set(SOLVER_GENERIC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../solver_generic")
-set(SOLVER_GENERIC_BUILD "${SOLVER_GENERIC_ROOT}/build")
+# Surchargeable via -DSOLVER_GENERIC_BUILD=... (ex: build_cc sur Compute Canada)
+if(NOT DEFINED SOLVER_GENERIC_BUILD)
+    set(SOLVER_GENERIC_BUILD "${SOLVER_GENERIC_ROOT}/build")
+endif()
 
 add_library(v1ld_generic_core STATIC IMPORTED)
 set_target_properties(v1ld_generic_core PROPERTIES
@@ -20,7 +23,10 @@ set_target_properties(v1ld_generic_core PROPERTIES
 )
 
 # ── Gecode ────────────────────────────────────────────────────────────────────
-set(GECODE_PREFIX "/opt/homebrew/opt/gecode")
+# Surchargeable via -DGECODE_PREFIX=... (Compute Canada, Linux, etc.)
+if(NOT DEFINED GECODE_PREFIX)
+    set(GECODE_PREFIX "/opt/homebrew/opt/gecode")
+endif()
 
 # ── Exécutable bab_mkp_gecode (Gecode BAB + borne V1LD) ──────────────────────
 add_executable(bab_mkp_gecode
