@@ -87,11 +87,14 @@ to_accepting(py::array_t<uint8_t> arr) {
 
 static py::dict to_dict(const GecodeResult& r) {
     py::dict d;
-    d["objective"]    = r.objective;
-    d["optimal"]      = r.optimal;
-    d["feasible"]     = r.feasible;
-    d["solve_time_s"] = r.solve_time_s;
-    d["status"]       = r.status;
+    d["objective"]          = r.objective;
+    d["optimal"]            = r.optimal;
+    d["feasible"]           = r.feasible;
+    d["solve_time_s"]       = r.solve_time_s;
+    d["cold_start_time_s"]  = r.cold_start_time_s;
+    d["status"]             = r.status;
+    d["nodes"]              = r.nodes;
+    d["fails"]              = r.fails;
     return d;
 }
 

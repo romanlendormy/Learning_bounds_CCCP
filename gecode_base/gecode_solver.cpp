@@ -125,15 +125,20 @@ GecodeResult solve_gecode_mkp(
 
     BAB<MKPSpace> engine(model, opts);
     delete model;
+    double cold_start_s = elapsed_s(t0);
 
     MKPSpace* best = nullptr;
     while (MKPSpace* sol = engine.next()) { delete best; best = sol; }
 
     bool timed_out = stop && engine.stopped();
+    auto stats = engine.statistics();
     delete stop;
 
     GecodeResult res;
-    res.solve_time_s = elapsed_s(t0);
+    res.solve_time_s      = elapsed_s(t0);
+    res.cold_start_time_s = cold_start_s;
+    res.nodes        = static_cast<int64_t>(stats.node);
+    res.fails        = static_cast<int64_t>(stats.fail);
     if (best) {
         res.objective = static_cast<double>(best->obj.val()) / SCALE;
         res.feasible  = true;
@@ -322,15 +327,20 @@ GecodeResult solve_gecode_ssp(
 
     BAB<SSPSpace> engine(model, opts);
     delete model;
+    double cold_start_s = elapsed_s(t0);
 
     SSPSpace* best = nullptr;
     while (SSPSpace* sol = engine.next()) { delete best; best = sol; }
 
     bool timed_out = stop && engine.stopped();
+    auto stats = engine.statistics();
     delete stop;
 
     GecodeResult res;
-    res.solve_time_s = elapsed_s(t0);
+    res.solve_time_s      = elapsed_s(t0);
+    res.cold_start_time_s = cold_start_s;
+    res.nodes = static_cast<int64_t>(stats.node);
+    res.fails = static_cast<int64_t>(stats.fail);
     if (best) {
         res.objective = static_cast<double>(best->total_profit.val()) / SCALE;
         res.feasible  = true;

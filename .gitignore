@@ -26,3 +26,10 @@ benchmark_*.ipynb
 
 # Mémoire Claude Code (locale)
 .claude/
+
+#Solevr swanne t Darius
+solver_swann_darius.cpp
+
+# Datasets volumineux (recréables via les scripts de génération)
+data/knapsack/datasets-song-github
+data/knapsack/datasets-pisinger/

@@ -8,7 +8,7 @@
 #include <chrono>
 #include <limits>
 #include <numeric>
-#include <queue>
+#include <vector>
 #include <tuple>
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -74,7 +74,9 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     double    time_lim,
     int       T_root,
     int       T_node,
-    BoundMode bound_mode)
+    BoundMode bound_mode,
+    bool      patience_mode,
+    double    patience_tol)
 {
     using Clock = std::chrono::steady_clock;
     auto t0 = Clock::now();
@@ -90,22 +92,23 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     MKPSharedData shared(n, m, N, epsilon, c, p, A, b, T_node);
     shared.T_root         = T_root;
     shared.bound_mode     = bound_mode;
+    shared.patience_mode  = patience_mode;
+    shared.patience_tol   = patience_tol;
     shared.initial_lb_int = greedy_int;   // fournit l'incumbent à l'espace racine
 
-    // ── 2. Best-first B&B avec Gecode Spaces ─────────────────────────────────
-    // On implémente nous-mêmes la file de priorité (par UB décroissante)
-    // en utilisant l'API publique de Gecode : status() / choice() / commit() / clone().
-    // Cela donne la même stratégie de recherche que bab_mkp.cpp (best-first).
+    // ── 2. DFS B&B avec Gecode Spaces ────────────────────────────────────────
+    // On gère nous-mêmes la pile DFS (LIFO) en utilisant l'API publique de
+    // Gecode : status() / choice() / commit() / clone().
     //
     // Séquence par nœud :
-    //   1. pop(space) depuis la priority_queue (UB max en tête)
+    //   1. pop(space) depuis la pile (dernier poussé = exploré en premier)
     //   2. space->status() : propage les contraintes, retourne SS_BRANCH/SS_SOLVED/SS_FAILED
     //   3. space->choice() : décision de branchement (variable RATIO, valeur 1 en premier)
     //   4. Pour a ∈ {0,1} :
     //      child = space->clone()
     //      child->commit(*c, a)   → BoundBrancher::commit() → more() → obj ≤ ub_int
     //      child->status()        → propage, y compris obj ≤ ub_int
-    //      push(child_ub, child)  si child_ub > incumbent
+    //      push_back(child)       si child_ub > incumbent
     //   5. delete c ; delete space
 
     auto time_ok = [&]() {
@@ -114,10 +117,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     };
 
     using NodeTup = std::tuple<double, int, MKPSpaceV1LD*>;  // (ub, depth, space)
-    auto node_cmp = [](const NodeTup& a, const NodeTup& b) {
-        return std::get<0>(a) < std::get<0>(b);   // max-heap par UB
-    };
-    std::priority_queue<NodeTup, std::vector<NodeTup>, decltype(node_cmp)> open(node_cmp);
+    std::vector<NodeTup> open;  // pile DFS (LIFO)
 
     int64_t nodes          = 0;
     int64_t fails          = 0;
@@ -132,7 +132,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
         SpaceStatus rst = root->status();
         if (rst == SS_BRANCH) {
             double rub = root->obj.max() / (double)MKPSharedData::SCALE;
-            open.push({rub, 0, root});
+            open.push_back({rub, 0, root});
         } else if (rst == SS_SOLVED) {
             best_val = root->obj.val() / (double)MKPSharedData::SCALE;
             best = root; ++incumbent_impr;
@@ -142,7 +142,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     }
 
     while (!open.empty() && time_ok()) {
-        auto [ub, depth, space] = open.top(); open.pop();
+        auto [ub, depth, space] = open.back(); open.pop_back();
 
         // Élagage par incumbent
         if (ub <= best_val + 1e-6) { ++fails; delete space; continue; }
@@ -186,7 +186,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
                 continue;
             }
 
-            open.push({cub, depth + 1, child});
+            open.push_back({cub, depth + 1, child});
         }
 
         delete c;
@@ -197,7 +197,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
 
     // Libérer les nœuds restants dans la file
     while (!open.empty()) {
-        auto [ub, d, sp] = open.top(); open.pop();
+        auto [ub, d, sp] = open.back(); open.pop_back();
         delete sp;
     }
 
@@ -215,7 +215,10 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     res.depth            = max_depth;
     res.incumbent_improvements = incumbent_impr;
     res.more_calls       = static_cast<int64_t>(shared.more_calls);
-    res.ub_tightened     = static_cast<int64_t>(shared.ub_tightened);
+    res.ub_tightened       = static_cast<int64_t>(shared.ub_tightened);
+    res.root_bound_time_s  = shared.root_bound_time_s;
+    res.t_bound_total_s    = shared.t_bound_total_s;
+    res.t_bab_pure_s       = res.solve_time_s - shared.t_bound_total_s;
 
     if (best) {
         // Dé-scaler l'objectif : best->obj.val() est en unités SCALE

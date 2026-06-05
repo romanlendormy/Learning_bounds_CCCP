@@ -85,13 +85,16 @@ int main(int argc, char* argv[])
     // mode : "v1ld" (défaut) ou "v1cld"
     std::string mode_str    = (argc > 7) ? argv[7] : "v1ld";
     BoundMode   bound_mode  = (mode_str == "v1cld") ? BoundMode::V1CLD : BoundMode::V1LD;
+    // patience : "patience" active le mode convergence, sinon itérations fixes
+    bool        patience    = (argc > 8) && std::string(argv[8]) == "patience";
+    double      patience_tol = (argc > 9) ? std::stod(argv[9]) : 0.1;
 
     MKPInst inst = load_song_local(dataset, replication);
 
     std::cout << "═══════════════════════════════════════════════════\n";
     std::cout << "  CCMKP — Gecode BAB + borne "
               << (bound_mode == BoundMode::V1LD ? "V1LD (ζ exact B&B)"
-                                                : "V1CLD (LP-relax 1D)")
+                                                : "V1CLD (ζ DP 1D exact)")
               << "\n";
     std::cout << "═══════════════════════════════════════════════════\n";
     std::cout << "  Fichier : " << dataset << "\n";
@@ -100,13 +103,16 @@ int main(int argc, char* argv[])
               << "  rep=" << replication << "\n";
     std::cout << "  T_root=" << T_root << "  T_node=" << T_node
               << "  time_limit=" << time_limit << "s"
-              << "  mode=" << mode_str << "\n";
+              << "  mode=" << mode_str
+              << (patience ? ("  patience=oui(tol=" + std::to_string(patience_tol) + ")") : "  patience=non")
+              << "\n";
     std::cout << "───────────────────────────────────────────────────\n";
 
     GecodeV1LDResult res = solve_gecode_bab_mkp(
         inst.n, inst.m, inst.N, epsilon,
         inst.c, inst.p, inst.A, inst.b,
-        time_limit, T_root, T_node, bound_mode);
+        time_limit, T_root, T_node, bound_mode,
+        patience, patience_tol);
 
     std::cout << "\n═══════════════════════════════════════════════════\n";
     std::cout << "  RÉSULTATS\n";
@@ -149,9 +155,20 @@ int main(int argc, char* argv[])
               << "% des appels)\n\n";
 
     std::cout << std::setprecision(3);
-    std::cout << "  Temps total               : " << res.solve_time_s << " s\n";
+    std::cout << "  Temps total               : " << res.solve_time_s     << " s\n";
+    std::cout << "  Temps borne root          : " << res.root_bound_time_s << " s"
+              << "  (T_root=" << T_root << " iters)\n";
+    std::cout << "  Temps borne total         : " << res.t_bound_total_s   << " s"
+              << "  (" << std::fixed << std::setprecision(1)
+              << (res.solve_time_s > 0 ? 100.0 * res.t_bound_total_s / res.solve_time_s : 0.0)
+              << "% du total)\n";
+    std::cout << "  Temps BAB pur             : " << res.t_bab_pure_s      << " s"
+              << "  (" << std::fixed << std::setprecision(1)
+              << (res.solve_time_s > 0 ? 100.0 * res.t_bab_pure_s / res.solve_time_s : 0.0)
+              << "% du total)\n";
     if (res.nodes > 0)
         std::cout << "  Temps moyen par nœud     : "
+                  << std::setprecision(3)
                   << res.solve_time_s / res.nodes * 1000.0 << " ms\n";
     std::cout << "═══════════════════════════════════════════════════\n";
 

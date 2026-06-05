@@ -17,9 +17,9 @@ MKPCLDProblem::solve_theta(int /*j*/, const Vec1d& cost) const
     return solve_theta_i_max(cost);
 }
 
-// ζ_{i,j} : LP-relaxation du knapsack à une contrainte A[i][j] x ≤ b[i][j]
+// ζ_{i,j} : 0/1 knapsack exact à une contrainte A[i][j] x ≤ b[i][j]
 std::pair<double, Vec1d>
 MKPCLDProblem::solve_zeta(int i, int j, const Vec1d& cost) const
 {
-    return solve_zeta_i_packing_lp(cost, A_[i][j], b_[i][j]);
+    return solve_zeta_i_exact_bb(cost, A_[i][j], b_[i][j]);
 }

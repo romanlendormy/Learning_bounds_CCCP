@@ -13,11 +13,14 @@
 #include <string>
 
 struct GecodeResult {
-    double      objective;      // valeur objective (non scalée)
-    bool        optimal;        // true si preuve d'optimalité
-    bool        feasible;       // true si au moins une solution trouvée
-    double      solve_time_s;   // temps total (construction + résolution)
-    std::string status;         // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
+    double      objective;           // valeur objective (non scalée)
+    bool        optimal;             // true si preuve d'optimalité
+    bool        feasible;            // true si au moins une solution trouvée
+    double      solve_time_s;        // temps total (construction + résolution)
+    double      cold_start_time_s;   // temps de propagation initiale à la racine (construction modèle + init BAB)
+    std::string status;              // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
+    int64_t     nodes = 0;           // nœuds traités (engine.statistics().node)
+    int64_t     fails = 0;           // nœuds échoués (engine.statistics().fail)
 };
 
 /*
