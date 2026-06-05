@@ -76,6 +76,7 @@
 #include <gecode/search.hh>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numeric>
 #include <vector>
@@ -128,6 +129,14 @@ struct MKPSharedData {
     double rel_tol    = 1e-4;  // tolérance d'arrêt anticipé du sous-gradient
     int    tol_window = 30;    // fenêtre pour vérifier la tolérance
 
+    // ── Mode patience ─────────────────────────────────────────────────────────
+    // Si true, chaque appel more() aux nœuds (hors root) tourne jusqu'à ce que
+    // la borne converge à patience_tol près (arrêt anticipé par rel_tol),
+    // avec un plafond de patience_max_iters itérations.
+    bool   patience_mode      = false;
+    double patience_tol       = 0.1;    // tolérance de convergence (10^-1 par défaut)
+    int    patience_max_iters = 500;    // plafond d'itérations en mode patience
+
     // ── Compteurs de statistiques (mutable : modifiés dans more() via const*) ─
     //
     // ub_tightened : nombre de fois où la borne V1LD est strictement inférieure
@@ -146,10 +155,12 @@ struct MKPSharedData {
     // solution déjà connue (typiquement : la solution gloutonne).
     int initial_lb_int = 0;
 
-    mutable int more_calls       = 0;   // nombre total d'appels à more()
-    mutable int ub_tightened     = 0;   // appels où la borne réduit obj.max()
-    mutable int fails_from_bound = 0;   // appels où la borne crée une contradiction directe
-    mutable double best_open_ub = 0.0;  // meilleure UB vue sur un nœud non-élagué
+    mutable int more_calls          = 0;    // nombre total d'appels à more()
+    mutable int ub_tightened        = 0;    // appels où la borne réduit obj.max()
+    mutable int fails_from_bound    = 0;    // appels où la borne crée une contradiction directe
+    mutable double best_open_ub     = 0.0;  // meilleure UB vue sur un nœud non-élagué
+    mutable double root_bound_time_s = 0.0; // durée du cold start (premier appel more(), T_root iters)
+    mutable double t_bound_total_s   = 0.0; // temps total cumulé dans tous les appels more()
 
     // ── Ordre de branchement (RATIO, calculé une fois à la construction) ──────
     // Items triés par c_k / (Σ_i Σ_j p_i * A_i[j][k] / b_i[j]) décroissant.
@@ -219,10 +230,13 @@ struct GecodeV1LDResult {
     int64_t     fails_from_bound;   // sous-ensemble : fails causés directement par notre borne V1LD
     int64_t     fails_from_cp;      // estimé = fails − fails_from_bound (propagation CP native)
     int64_t     incumbent_improvements; // nombre de fois où une meilleure solution a été trouvée
-    int64_t     more_calls;         // appels totaux à more() (= branches explorées avec commit OK)
-    int64_t     ub_tightened;       // sous-ensemble : borne V1LD a réellement réduit obj.max()
-    int64_t     depth;              // profondeur maximale atteinte dans l'arbre
-    std::string status;             // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
+    int64_t     more_calls;           // appels totaux à more() (= branches explorées avec commit OK)
+    int64_t     ub_tightened;         // sous-ensemble : borne V1LD a réellement réduit obj.max()
+    int64_t     depth;                // profondeur maximale atteinte dans l'arbre
+    double      root_bound_time_s;    // temps du premier appel à more() (cold start, T_root iters)
+    double      t_bound_total_s;      // temps cumulé dans tous les appels more()
+    double      t_bab_pure_s;         // temps B&B pur = t_total - t_bound_total
+    std::string status;               // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -551,7 +565,23 @@ public:
         // Chaque espace hérite lambda_warmed de son parent via le clone : les petits-fils
         // voient lambda_warmed=true dès que le parent a déjà appelé more().
         bool is_first = !lambda_warmed;
-        int  T_iters  = is_first ? data->T_root : data->T_node;
+
+        // Nombre d'itérations et tolérance selon le mode
+        int    T_iters;
+        double node_tol;
+        if (is_first) {
+            T_iters   = data->T_root;
+            node_tol  = data->rel_tol;
+        } else if (data->patience_mode) {
+            T_iters   = data->patience_max_iters;   // plafond
+            node_tol  = data->patience_tol;         // arrêt anticipé à 10^-1
+        } else {
+            T_iters   = data->T_node;
+            node_tol  = data->rel_tol;
+        }
+
+        using Clock = std::chrono::steady_clock;
+        auto t_bound_start = Clock::now();
 
         double ub;  // borne supérieure retournée par le solveur Lagrangien choisi
 
@@ -565,7 +595,7 @@ public:
 
             MKPProblemBnB prob(c_free, data->p, A_free, b_adj, data->epsilon);
             V1LDResult res = solve_v1ld(prob, T_iters, 0, false, -1.0,
-                                        data->rel_tol, data->tol_window, -1e18,
+                                        node_tol, data->tol_window, -1e18,
                                         lambda_init);
 
             for (int i = 0; i < N; ++i)
@@ -584,7 +614,7 @@ public:
 
             MKPCLDProblem prob(c_free, data->p, A_free, b_adj, data->epsilon);
             V1CLDResult res = solve_v1cld(prob, T_iters, 0, false, -1.0,
-                                          data->rel_tol, data->tol_window, -1e18,
+                                          node_tol, data->tol_window, -1e18,
                                           lambda_init);
 
             for (int i = 0; i < N; ++i)
@@ -593,6 +623,12 @@ public:
                         lambda_v1cld[i][j][free_vars[kf]] = res.lambda_star[i][j][kf];
             ub = fp + res.v1CLD_star;
         }
+
+        double elapsed_bound = std::chrono::duration<double>(
+            Clock::now() - t_bound_start).count();
+        data->t_bound_total_s += elapsed_bound;
+        if (is_first)
+            data->root_bound_time_s = elapsed_bound;
 
         lambda_warmed = true;
         if (ub > data->best_open_ub) data->best_open_ub = ub;  // mise à jour de la meilleure UB vue
@@ -647,7 +683,9 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
     const Vec3d& A, const Vec2d& b,
-    double    time_lim   = 300.0,
-    int       T_root     = 200,
-    int       T_node     = 30,
-    BoundMode bound_mode = BoundMode::V1LD);
+    double    time_lim      = 300.0,
+    int       T_root        = 200,
+    int       T_node        = 30,
+    BoundMode bound_mode    = BoundMode::V1LD,
+    bool      patience_mode = false,
+    double    patience_tol  = 0.1);

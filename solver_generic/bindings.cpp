@@ -21,8 +21,8 @@
 #include "v1cld_solver.hpp"
 #include "mkp_problem.hpp"
 #include "mkp_problem_bnb.hpp"
-#include "mkp_problem_lp.hpp"
 #include "mkp_cld_problem.hpp"
+#include "mkp_cld_problem_dp.hpp"
 #include "ssp_problem.hpp"
 #include "ssp_cld_problem.hpp"
 
@@ -179,26 +179,7 @@ Args:
         py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
         py::arg("epsilon"));
 
-    // ── MKPProblemLP (variante LP-relax pour benchmark) ──────────────────────
-    py::class_<MKPProblemLP, MKPProblem>(m, "MKPProblemLP",
-        "Variante LP-relax de MKPProblem — solve_zeta par LP fractionnaire 1D (min sur j).")
-        .def(py::init([](
-            py::array_t<double> c_arr,
-            py::array_t<double> p_arr,
-            py::array_t<double> A_arr,
-            py::array_t<double> b_arr,
-            double epsilon)
-        {
-            return new MKPProblemLP(
-                to_vec1d(c_arr), to_vec1d(p_arr),
-                to_vec3d(A_arr), to_vec2d(b_arr),
-                epsilon
-            );
-        }),
-        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
-        py::arg("epsilon"));
-
-    // ── MKPCLDProblem ─────────────────────────────────────────────────────────
+    // ── MKPCLDProblem (ζ par B&B 1D — défaut) ────────────────────────────────
     py::class_<V1CLDProblem>(m, "V1CLDProblem")
         .def("n_vars",         &V1CLDProblem::n_vars)
         .def("N_scen",         &V1CLDProblem::N_scen)
@@ -224,6 +205,35 @@ Args:
             double epsilon)
         {
             return new MKPCLDProblem(
+                to_vec1d(c_arr), to_vec1d(p_arr),
+                to_vec3d(A_arr), to_vec2d(b_arr),
+                epsilon
+            );
+        }),
+        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
+        py::arg("epsilon"));
+
+    // ── MKPCLDProblemDP (ζ par DP O(n×W)) ────────────────────────────────────
+    py::class_<MKPCLDProblemDP, MKPCLDProblem>(m, "MKPCLDProblemDP",
+        R"doc(
+Variante DP de MKPCLDProblem — solve_zeta par DP O(n × W) au lieu du B&B.
+Même interface que MKPCLDProblem, utilisable avec solve_v1cld.
+
+Args:
+    c       : (n,)      coûts déterministes
+    p       : (N,)      probabilités des scénarios
+    A       : (N, m, n) matrices de contraintes
+    b       : (N, m)    membres droits
+    epsilon : niveau de risque ε
+)doc")
+        .def(py::init([](
+            py::array_t<double> c_arr,
+            py::array_t<double> p_arr,
+            py::array_t<double> A_arr,
+            py::array_t<double> b_arr,
+            double epsilon)
+        {
+            return new MKPCLDProblemDP(
                 to_vec1d(c_arr), to_vec1d(p_arr),
                 to_vec3d(A_arr), to_vec2d(b_arr),
                 epsilon

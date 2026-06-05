@@ -32,6 +32,7 @@ add_library(v1ld_generic_core STATIC
     mkp/mkp_problem.cpp
     mkp/mkp_problem_bnb.cpp
     mkp/mkp_cld_problem.cpp
+    mkp/mkp_cld_problem_dp.cpp
     ssp/ssp_problem.cpp
     ssp/ssp_cld_problem.cpp
     covset/covset_problem.cpp

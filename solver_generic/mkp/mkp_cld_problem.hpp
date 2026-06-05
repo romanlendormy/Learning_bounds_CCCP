@@ -8,11 +8,10 @@
  * une par contrainte j.  Les sous-problèmes sont :
  *
  *   solve_theta(j, cost) = max_{x ∈ {0,1}^n} cost^T x          (sans contrainte)
- *   solve_zeta(i, j, cost) = LP-relax. du knapsack A[i][j] x ≤ b[i][j]  (1D)
+ *   solve_zeta(i, j, cost) = 0/1 knapsack exact 1D via B&B  A[i][j] x ≤ b[i][j]
  *
- * La LP fractionnaire donne ζ ≥ ζ_entier, donc δ = θ−ζ ≤ δ_entier,
- * ce qui produit une borne supérieure valide (mais légèrement moins serrée
- * que si on utilisait le B&B).  C'est le même choix que solver_mkp/v1mkp_core.
+ * Le DP exact donne ζ = ζ_entier, donc δ = θ−ζ est la vraie pénalité,
+ * ce qui produit une borne L1 plus serrée qu'avec la LP fractionnaire.
  */
 class MKPCLDProblem : public V1CLDProblem {
 public:
@@ -28,7 +27,7 @@ public:
     std::pair<double, Vec1d> solve_theta(int j, const Vec1d& cost) const override;
     std::pair<double, Vec1d> solve_zeta(int i, int j, const Vec1d& cost) const override;
 
-private:
+protected:
     Vec1d  c_;
     Vec1d  p_;
     Vec3d  A_;   // (N, m, n)
