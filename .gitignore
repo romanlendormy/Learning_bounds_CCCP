@@ -34,7 +34,8 @@ solver_swann_darius.cpp
 data/knapsack/datasets-song-github
 data/knapsack/datasets-pisinger/
 data/knapsack/pisinger
-data/train
+data/train_v1ld
+data/train_v1cld
 data/ssp
 
 GNN_swann_darius

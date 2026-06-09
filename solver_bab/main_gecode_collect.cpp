@@ -152,10 +152,11 @@ int main(int argc, char* argv[])
     MKPInst first = load_rep(dataset, reps[0]);
     int n_val = first.n;
 
-    // Chemins de sortie dérivés de n
-    std::string sep = (outdir.back() == '/') ? "" : "/";
-    std::string instances_fp = outdir + sep + "instances_n" + std::to_string(n_val) + ".txt";
-    std::string nodes_fp     = outdir + sep + "nodes_n"     + std::to_string(n_val) + ".txt";
+    // Répertoire de sortie suffixé par le mode (ex: data/train_v1LD)
+    std::string outdir_mode = outdir + "_" + mode_str;
+    std::string sep = (outdir_mode.back() == '/') ? "" : "/";
+    std::string instances_fp = outdir_mode + sep + "instances_n" + std::to_string(n_val) + ".txt";
+    std::string nodes_fp     = outdir_mode + sep + "nodes_n"     + std::to_string(n_val) + ".txt";
 
     // Déduire start_id en comptant les lignes non vides déjà présentes
     int start_id = 0;
@@ -167,7 +168,7 @@ int main(int argc, char* argv[])
     }
 
     // Créer le répertoire de sortie si nécessaire
-    std::filesystem::create_directories(outdir);
+    std::filesystem::create_directories(outdir_mode);
 
     // Ouvrir en mode append (crée le fichier s'il n'existe pas)
     std::ofstream inst_out(instances_fp, std::ios::app);
