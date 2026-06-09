@@ -51,3 +51,28 @@ target_link_libraries(bab_mkp_gecode PRIVATE
 )
 
 target_compile_options(bab_mkp_gecode PRIVATE -O3 -march=native)
+
+# ── Exécutable bab_mkp_gecode_collect (BAB + collecte données GNN) ────────────
+add_executable(bab_mkp_gecode_collect
+    main_gecode_collect.cpp
+    gecode_bab_collect.cpp
+    gecode_bab.cpp
+)
+
+target_include_directories(bab_mkp_gecode_collect PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/mkp
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${SOLVER_GENERIC_ROOT}/covset
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(bab_mkp_gecode_collect PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(bab_mkp_gecode_collect PRIVATE -O3 -march=native)
