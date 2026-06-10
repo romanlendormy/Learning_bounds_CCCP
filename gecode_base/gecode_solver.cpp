@@ -128,7 +128,8 @@ GecodeResult solve_gecode_mkp(
     double cold_start_s = elapsed_s(t0);
 
     MKPSpace* best = nullptr;
-    while (MKPSpace* sol = engine.next()) { delete best; best = sol; }
+    int64_t inc_impr = 0;
+    while (MKPSpace* sol = engine.next()) { delete best; best = sol; ++inc_impr; }
 
     bool timed_out = stop && engine.stopped();
     auto stats = engine.statistics();
@@ -139,6 +140,8 @@ GecodeResult solve_gecode_mkp(
     res.cold_start_time_s = cold_start_s;
     res.nodes        = static_cast<int64_t>(stats.node);
     res.fails        = static_cast<int64_t>(stats.fail);
+    res.depth        = static_cast<int64_t>(stats.depth);
+    res.incumbent_improvements = inc_impr;
     if (best) {
         res.objective = static_cast<double>(best->obj.val()) / SCALE;
         res.feasible  = true;

@@ -122,13 +122,17 @@ int main(int argc, char* argv[])
     if (argc < 2) {
         std::cerr << "Usage : bab_mkp_gecode_collect <dataset.txt> "
                      "[epsilon=0.1] [T_node=30] [time_limit=-1.0] [T_root=200] "
-                     "[mode=v1ld] [outdir=.] [max_depth_collect=-1]\n"
+                     "[mode=v1ld] [outdir=.] [max_depth_collect=-1] "
+                     "[patience_mode=0] [patience_tol=0.1]\n"
                      "\n"
                      "Les fichiers de sortie sont nommés automatiquement :\n"
                      "  <outdir>/instances_n{n}.txt  et  <outdir>/nodes_n{n}.txt\n"
                      "où n est le nombre de variables de la première instance.\n"
                      "Les fichiers sont ouverts en mode append ; start_id est\n"
-                     "déduit du nombre de lignes déjà présentes.\n";
+                     "déduit du nombre de lignes déjà présentes.\n"
+                     "\n"
+                     "patience_mode=1 : chaque nœud tourne jusqu'à convergence\n"
+                     "  (patience_tol) au lieu d'un nombre fixe T_node d'itérations.\n";
         return 1;
     }
 
@@ -139,7 +143,9 @@ int main(int argc, char* argv[])
     int         T_root     = (argc > 5) ? std::stoi(argv[5]) : 200;
     std::string mode_str        = (argc > 6) ? argv[6] : "v1ld";
     std::string outdir          = (argc > 7) ? argv[7] : ".";
-    int         max_depth_collect = (argc > 8) ? std::stoi(argv[8]) :10;
+    int         max_depth_collect = (argc > 8) ? std::stoi(argv[8]) : 10;
+    bool        patience_mode   = (argc > 9) ? (std::stoi(argv[9]) != 0) : false;
+    double      patience_tol    = (argc > 10) ? std::stod(argv[10]) : 0.1;
 
     BoundMode bound_mode = (mode_str == "v1cld") ? BoundMode::V1CLD : BoundMode::V1LD;
 
@@ -204,7 +210,7 @@ int main(int argc, char* argv[])
             inst.c, inst.p, inst.A, inst.b,
             inst_out, node_out, instance_id,
             time_limit, T_root, T_node, bound_mode,
-            false, 0.1, max_depth_collect);
+            patience_mode, patience_tol, max_depth_collect);
 
         if (res.optimal) {
             std::cout << std::fixed << std::setprecision(2)
