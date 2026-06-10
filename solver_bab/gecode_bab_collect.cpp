@@ -22,7 +22,8 @@ NodeRecord collect_node_state(
     int depth)
 {
     NodeRecord rec;
-    rec.depth = depth;
+    rec.depth    = depth;
+    rec.ub_node  = space->obj.max() / (double)MKPSharedData::SCALE;
     rec.fix_ones.assign(data.n, 0);
 
     // Variables fixées à 1 (par commit explicite ou propagation CP)
@@ -36,19 +37,17 @@ NodeRecord collect_node_state(
     }
 
     // Profit accumulé
-    rec.fix_bound = 0.0;
-    for (int k : fixed_one) rec.fix_bound += data.c[k];
+    rec.curr_cost = 0.0;
+    for (int k : fixed_one) rec.curr_cost += data.c[k];
 
-    // Capacités résiduelles et scénarios violés
-    rec.b_res.assign(data.N, Vec1d(data.m, 0.0));
+    // Scénarios violés (b_res non stocké : reconstructible depuis instances.txt)
     rec.violated_count = 0;
     for (int i = 0; i < data.N; ++i) {
         bool violated = false;
         for (int j = 0; j < data.m; ++j) {
             double consumed = 0.0;
             for (int k : fixed_one) consumed += data.A[i][j][k];
-            rec.b_res[i][j] = data.b[i][j] - consumed;
-            if (rec.b_res[i][j] < -1e-9) violated = true;
+            if (data.b[i][j] - consumed < -1e-9) violated = true;
         }
         if (violated) ++rec.violated_count;
     }
@@ -96,14 +95,11 @@ void write_node_line(
 {
     out << std::fixed << std::setprecision(6);
     out << instance_id << ',' << rec.depth << ','
-        << rec.fix_bound << ',' << rec.violated_count;
+        << rec.curr_cost << ',' << rec.ub_node << ','
+        << rec.violated_count;
 
     for (int v : rec.fix_ones)
         out << ',' << (int)v;
-
-    for (const auto& row : rec.b_res)
-        for (double val : row)
-            out << ',' << val;
 
     out << '\n';
 }

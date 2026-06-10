@@ -14,9 +14,9 @@
  *     A[k=0..N-1, j=0..m-1, i=0..n-1]  (row-major sur (k,j))
  *
  *   nodes.txt  (une ligne par nœud de branchement)
- *     instance_id, depth, fix_bound, violated_count,
- *     fix_ones[0..n-1],
- *     b_res[k=0..N-1, j=0..m-1]  (même ordre que b)
+ *     instance_id, depth, curr_cost, ub_node, violated_count,
+ *     fix_ones[0..n-1]
+ *   (b_res est omis : reconstructible depuis fix_ones + b + A de instances.txt)
  *
  * Seules les instances résolues à optimalité (res.optimal == true) sont écrites,
  * car le label opt doit être la vraie valeur optimale.
@@ -33,12 +33,11 @@
 
 struct NodeRecord {
     int    depth;
-    double fix_bound;       // Σ_{k ∈ F₁} c[k]  (profit des items déjà sélectionnés)
+    double curr_cost;       // Σ_{k ∈ F₁} c[k]  (profit des items déjà sélectionnés)
+    double ub_node;         // borne supérieure Lagrangienne calculée à ce nœud
     int    violated_count;  // |{i : ∃j, b_res[i][j] < 0}|  (scénarios déjà violés)
 
     std::vector<int8_t> fix_ones;  // fix_ones[k] = 1 si x[k] fixé à 1,  taille n
-    Vec2d               b_res;     // capacités résiduelles (N, m)
-                                   //   b_res[i][j] = b[i][j] - Σ_{k∈F₁} A[i][j][k]
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

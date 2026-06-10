@@ -76,3 +76,22 @@ target_link_libraries(bab_mkp_gecode_collect PRIVATE
 )
 
 target_compile_options(bab_mkp_gecode_collect PRIVATE -O3 -march=native)
+
+# ── Exécutable bab_mkp_gecode_base (Gecode CP pur, sans borne Lagrangienne) ──
+add_executable(bab_mkp_gecode_base
+    main_gecode_base.cpp
+    ../gecode_base/gecode_solver.cpp
+)
+
+target_include_directories(bab_mkp_gecode_base PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SOLVER_GENERIC_ROOT}
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(bab_mkp_gecode_base PRIVATE
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(bab_mkp_gecode_base PRIVATE -O3 -march=native)

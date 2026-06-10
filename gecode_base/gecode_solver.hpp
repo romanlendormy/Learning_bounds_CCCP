@@ -21,6 +21,8 @@ struct GecodeResult {
     std::string status;              // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
     int64_t     nodes = 0;           // nœuds traités (engine.statistics().node)
     int64_t     fails = 0;           // nœuds échoués (engine.statistics().fail)
+    int64_t     depth = 0;           // profondeur max atteinte (engine.statistics().depth)
+    int64_t     incumbent_improvements = 0;  // nombre de solutions améliorantes trouvées
 };
 
 /*
