@@ -25,11 +25,11 @@ import time
 from itertools import product
 from pathlib import Path
 
-ROOT = Path(__file__).parent.resolve()
+ROOT = Path(__file__).parent.parent.resolve()
 
 # ── Paramètres sweep ───────────────────────────────────────────────────────────
-N_VALS       = [5, 10, 20]      # nombre d'items. 30
-M_VALS       = [2, 5, 10, 15]      # nombre de contraintes
+N_VALS       = [5,10,20]      # nombre d'items. 30
+M_VALS       = [2,5,10,15]      # nombre de contraintes
 S_VALS       = [50, 100, 250, 500]  # nombre de scénarios (N)
 # N_VALS       = [5]      # nombre d'items
 # M_VALS       = [2]      # nombre de contraintes

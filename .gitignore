@@ -23,6 +23,8 @@ __pycache__/
 
 # Notebooks de benchmark (recréables, non versionnés)
 benchmark_*.ipynb
+bench_*.ipynb
+
 
 # Mémoire Claude Code (locale)
 .claude/
