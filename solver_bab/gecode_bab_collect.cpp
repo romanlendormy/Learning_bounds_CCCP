@@ -19,37 +19,29 @@
 NodeRecord collect_node_state(
     const MKPSpaceV1LD* space,
     const MKPSharedData& data,
-    int depth)
+    int depth,
+    double incumbent)
 {
     NodeRecord rec;
-    rec.depth    = depth;
-    rec.ub_node  = space->obj.max() / (double)MKPSharedData::SCALE;
-    rec.fix_ones.assign(data.n, 0);
+    rec.depth     = depth;
+    rec.ub_node   = space->obj.max() / (double)MKPSharedData::SCALE;
+    rec.incumbent = incumbent;
 
-    // Variables fixées à 1 (par commit explicite ou propagation CP)
-    std::vector<int> fixed_one;
-    fixed_one.reserve(data.n);
+    // x_mask : 0=fixé_0, 1=fixé_1, 2=libre
+    rec.x_mask.assign(data.n, 2);
+    rec.curr_cost = 0.0;
     for (int k = 0; k < data.n; ++k) {
-        if (space->x[k].assigned() && space->x[k].val() == 1) {
-            rec.fix_ones[k] = 1;
-            fixed_one.push_back(k);
+        if (space->x[k].assigned()) {
+            rec.x_mask[k] = static_cast<int8_t>(space->x[k].val());
+            if (rec.x_mask[k] == 1) rec.curr_cost += data.c[k];
         }
     }
 
-    // Profit accumulé
-    rec.curr_cost = 0.0;
-    for (int k : fixed_one) rec.curr_cost += data.c[k];
-
-    // Scénarios violés (b_res non stocké : reconstructible depuis instances.txt)
-    rec.violated_count = 0;
+    // z_mask : 0=fixé_0, 1=fixé_1, 2=libre
+    rec.z_mask.assign(data.N, 2);
     for (int i = 0; i < data.N; ++i) {
-        bool violated = false;
-        for (int j = 0; j < data.m; ++j) {
-            double consumed = 0.0;
-            for (int k : fixed_one) consumed += data.A[i][j][k];
-            if (data.b[i][j] - consumed < -1e-9) violated = true;
-        }
-        if (violated) ++rec.violated_count;
+        if (space->z[i].assigned())
+            rec.z_mask[i] = static_cast<int8_t>(space->z[i].val());
     }
 
     return rec;
@@ -96,10 +88,10 @@ void write_node_line(
     out << std::fixed << std::setprecision(6);
     out << instance_id << ',' << rec.depth << ','
         << rec.curr_cost << ',' << rec.ub_node << ','
-        << rec.violated_count;
+        << rec.incumbent;
 
-    for (int v : rec.fix_ones)
-        out << ',' << (int)v;
+    for (int8_t v : rec.x_mask) out << ',' << (int)v;
+    for (int8_t v : rec.z_mask) out << ',' << (int)v;
 
     out << '\n';
 }
@@ -192,7 +184,7 @@ GecodeV1LDResult solve_gecode_bab_mkp_collect(
         if (depth > max_depth) max_depth = depth;
 
         if (max_depth_collect < 0 || depth <= max_depth_collect)
-            records.push_back(collect_node_state(space, shared, depth));
+            records.push_back(collect_node_state(space, shared, depth, best_val));
 
         const Gecode::Choice* ch = space->choice();
 

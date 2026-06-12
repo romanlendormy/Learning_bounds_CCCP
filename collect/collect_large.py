@@ -171,24 +171,37 @@ def main():
         print(f"Erreur : binaire introuvable : {args.binary}", file=sys.stderr)
         sys.exit(1)
 
+    # ── Fichier de progression (reprise automatique) ──────────────────────────
+    outdir = Path(f"{args.outdir}_{args.mode}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    progress_file = outdir / f"seeds_done_n{args.n}.txt"
+
+    done_seeds: set[int] = set()
+    if progress_file.exists():
+        done_seeds = {int(l.strip()) for l in progress_file.read_text().splitlines() if l.strip()}
+        if done_seeds:
+            print(f"[reprise] {len(done_seeds)} seeds déjà traitées (d'après {progress_file.name})")
+
     seeds = range(args.seed_start, args.seed_start + args.n_instances)
+    todo  = [s for s in seeds if s not in done_seeds]
 
     print("=" * 60)
     print(f"Collecte CC-MKP : n={args.n}  m={args.m}  N={args.N}")
-    print(f"  instances    : {args.n_instances}  (seeds {seeds.start}..{seeds.stop-1})")
+    print(f"  demandées    : {args.n_instances}  (seeds {seeds.start}..{seeds.stop-1})")
+    print(f"  à traiter    : {len(todo)}  ({len(done_seeds)} déjà faites)")
     print(f"  epsilon      : {args.epsilon}")
     print(f"  max_depth    : {args.max_depth}")
     node_cfg = (f"patience(tol={args.patience_tol})" if args.patience_mode
                 else f"T_node={args.T_node}")
     print(f"  mode         : {args.mode}  T_root={args.T_root}  {node_cfg}")
-    print(f"  sortie       : {args.outdir}_{args.mode}/")
+    print(f"  sortie       : {outdir}/")
     print("=" * 60)
 
     solved_total  = 0
     skipped_total = 0
 
-    for i, seed in enumerate(seeds):
-        print(f"\n[{i+1}/{args.n_instances}] seed={seed}", flush=True)
+    for i, seed in enumerate(todo):
+        print(f"\n[{i+1}/{len(todo)}] seed={seed}", flush=True)
 
         tmpfile = generate_song_tempfile(
             args.n, args.m, args.N, seed,
@@ -200,14 +213,17 @@ def main():
             skipped_total += k
             status = f"OK ({s}/{len(args.epsilon)} eps)" if k == 0 else f"{s} OK, {k} ignorés"
             print(f"  -> {status}")
+            # Marquer la seed comme traitée
+            with open(progress_file, "a") as pf:
+                pf.write(f"{seed}\n")
         finally:
             os.unlink(tmpfile)
 
     print("\n" + "=" * 60)
     print(f"Terminé : {solved_total} collectes réussies"
           f", {skipped_total} ignorées"
-          f"  (sur {args.n_instances} x {len(args.epsilon)} = "
-          f"{args.n_instances * len(args.epsilon)} au total)")
+          f"  (sur {len(todo)} x {len(args.epsilon)} = "
+          f"{len(todo) * len(args.epsilon)} au total)")
 
 
 if __name__ == "__main__":

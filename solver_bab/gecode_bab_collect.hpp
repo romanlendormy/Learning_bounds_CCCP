@@ -14,9 +14,10 @@
  *     A[k=0..N-1, j=0..m-1, i=0..n-1]  (row-major sur (k,j))
  *
  *   nodes.txt  (une ligne par nœud de branchement)
- *     instance_id, depth, curr_cost, ub_node, violated_count,
- *     fix_ones[0..n-1]
- *   (b_res est omis : reconstructible depuis fix_ones + b + A de instances.txt)
+ *     instance_id, depth, curr_cost, ub_node, incumbent,
+ *     x[0..n-1],   z[0..N-1]
+ *   Encodage ternaire : 0 = fixé à 0, 1 = fixé à 1, 2 = libre
+ *   (b_res omis : reconstructible depuis x_mask + b + A de instances.txt)
  *
  * Seules les instances résolues à optimalité (res.optimal == true) sont écrites,
  * car le label opt doit être la vraie valeur optimale.
@@ -33,11 +34,12 @@
 
 struct NodeRecord {
     int    depth;
-    double curr_cost;       // Σ_{k ∈ F₁} c[k]  (profit des items déjà sélectionnés)
-    double ub_node;         // borne supérieure Lagrangienne calculée à ce nœud
-    int    violated_count;  // |{i : ∃j, b_res[i][j] < 0}|  (scénarios déjà violés)
+    double curr_cost;   // Σ_{k : x_mask[k]==1} c[k]
+    double ub_node;     // borne supérieure Lagrangienne calculée à ce nœud
+    double incumbent;   // meilleure solution connue au moment de la visite
 
-    std::vector<int8_t> fix_ones;  // fix_ones[k] = 1 si x[k] fixé à 1,  taille n
+    std::vector<int8_t> x_mask;  // 0=fixé_0, 1=fixé_1, 2=libre  (taille n)
+    std::vector<int8_t> z_mask;  // 0=fixé_0, 1=fixé_1, 2=libre  (taille N)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +51,8 @@ struct NodeRecord {
 NodeRecord collect_node_state(
     const MKPSpaceV1LD* space,
     const MKPSharedData& data,
-    int depth);
+    int depth,
+    double incumbent);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fonctions d'écriture CSV
