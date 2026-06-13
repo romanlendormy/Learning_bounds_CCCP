@@ -52,3 +52,5 @@ results/
 external/
 
 *.sh.vscode/
+
+notebooks/

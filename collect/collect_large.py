@@ -182,12 +182,16 @@ def main():
         if done_seeds:
             print(f"[reprise] {len(done_seeds)} seeds déjà traitées (d'après {progress_file.name})")
 
-    seeds = range(args.seed_start, args.seed_start + args.n_instances)
-    todo  = [s for s in seeds if s not in done_seeds]
+    todo: list[int] = []
+    seed = args.seed_start
+    while len(todo) < args.n_instances:
+        if seed not in done_seeds:
+            todo.append(seed)
+        seed += 1
 
     print("=" * 60)
     print(f"Collecte CC-MKP : n={args.n}  m={args.m}  N={args.N}")
-    print(f"  demandées    : {args.n_instances}  (seeds {seeds.start}..{seeds.stop-1})")
+    print(f"  demandées    : {args.n_instances}  (seeds {todo[0]}..{todo[-1]})")
     print(f"  à traiter    : {len(todo)}  ({len(done_seeds)} déjà faites)")
     print(f"  epsilon      : {args.epsilon}")
     print(f"  max_depth    : {args.max_depth}")
