@@ -11,8 +11,14 @@
 #   for ds in train_v1LD train_base; do
 #       sbatch --export=ALL,DATASET=$ds,N_EPOCHS=200 run_train_gnn.sh
 #   done
+#
+# Reprise automatique : si un checkpoint ckpt_<run_name>.pt existe déjà dans
+# OUT_DIR, l'entraînement repart de cet epoch — soumettre simplement le même
+# job une deuxième fois avec les mêmes paramètres.
 
-# ── Ressources SLURM ──────────────────────────────────────────────────────────
+# ── Ressources SLURM — CHOISIR UN BLOC (décommenter l'un, commenter l'autre) ──
+
+# ---- Option A : CPU uniquement (recommandé — goulot est le B&B Python) -------
 #SBATCH --account=def-qcappart
 #SBATCH --job-name=gnn_v1ld
 #SBATCH --cpus-per-task=4
@@ -20,6 +26,19 @@
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/slurm_%x_%j.out
 #SBATCH --error=logs/slurm_%x_%j.err
+
+# ---- Option B : GPU H100 (partition gpubase_bygpu_b3) -----------------------
+# Utile si on passe à du batching ou si hidden >> 64.
+# Décommenter les lignes ci-dessous ET commenter Option A.
+##SBATCH --account=def-qcappart
+##SBATCH --job-name=gnn_v1ld_gpu
+##SBATCH --partition=gpubase_bygpu_b3
+##SBATCH --gres=gpu:h100:1
+##SBATCH --cpus-per-task=4
+##SBATCH --mem=32G
+##SBATCH --time=06:00:00
+##SBATCH --output=logs/slurm_%x_%j.out
+##SBATCH --error=logs/slurm_%x_%j.err
 
 set -euo pipefail
 
@@ -38,6 +57,9 @@ EVAL_EVERY="${EVAL_EVERY:-10}"
 EVAL_SAMPLE_SIZE="${EVAL_SAMPLE_SIZE:-200}"
 FINAL_EVAL_N_TRAIN="${FINAL_EVAL_N_TRAIN:-1000}"
 
+# "auto" : cuda si dispo, sinon cpu.  Forcer "cpu" ou "cuda" si besoin.
+DEVICE="${DEVICE:-auto}"
+
 # ── Chemins ────────────────────────────────────────────────────────────────────
 REPO="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DATA_SRC="$REPO/data"
@@ -48,12 +70,14 @@ VENV_PATH="$HOME/envs/learning_bounds"
 
 # ── Environnement ──────────────────────────────────────────────────────────────
 echo "=== Environnement ==="
-echo "  REPO      : $REPO"
-echo "  DATASET   : $DATASET"
-echo "  N_EPOCHS  : $N_EPOCHS"
-echo "  OUT_DIR   : $OUT_DIR"
+echo "  REPO         : $REPO"
+echo "  DATASET      : $DATASET"
+echo "  N_EPOCHS     : $N_EPOCHS"
+echo "  OUT_DIR      : $OUT_DIR"
+echo "  DEVICE       : $DEVICE"
 echo "  SLURM_JOB_ID : ${SLURM_JOB_ID:-local}"
-echo "  CPUs      : ${SLURM_CPUS_PER_TASK:-?}"
+echo "  CPUs         : ${SLURM_CPUS_PER_TASK:-?}"
+echo "  GPUs         : ${SLURM_GPUS:-0}"
 
 module load StdEnv/2023 gcc/12.3.0 python/3.11.5 2>/dev/null || \
     module load python/3.11 2>/dev/null || \
@@ -73,19 +97,33 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 # ── Copie des données vers le scratch local ($SLURM_TMPDIR) ───────────────────
-# $SLURM_TMPDIR est un disque local NVMe ultra-rapide sur chaque nœud de calcul.
-# Copier les données là évite les accès répétés sur le réseau Lustre (lent).
 echo ""
 echo "=== Copie des données vers SLURM_TMPDIR ==="
 DATA_LOCAL="$SLURM_TMPDIR/data"
 mkdir -p "$DATA_LOCAL/$DATASET"
 cp "$DATA_SRC/$DATASET/"*.txt "$DATA_LOCAL/$DATASET/"
-echo "  Copié : $(ls $DATA_LOCAL/$DATASET/ | wc -l) fichiers"
+echo "  Copié : $(ls "$DATA_LOCAL/$DATASET/" | wc -l) fichiers"
 
 # ── Création des dossiers de sortie ───────────────────────────────────────────
 mkdir -p "$OUT_DIR"
 mkdir -p "$REPO/logs"
 echo "  OUT_DIR : $OUT_DIR"
+
+# ── Reprise automatique depuis un checkpoint existant ─────────────────────────
+# Le nom du checkpoint est déterministe (construit depuis les hyperparamètres).
+# Soumettre le même job deux fois avec les mêmes params reprend automatiquement.
+RUN_NAME="${DATASET}_n${N_VAL}_ep${N_EPOCHS}_lr${LR}_bs${BATCH_SIZE}_h${HIDDEN}_seed${SEED}"
+CKPT="$OUT_DIR/ckpt_${RUN_NAME}.pt"
+RESUME_ARG=""
+if [ -f "$CKPT" ]; then
+    echo ""
+    echo "=== Checkpoint trouvé — reprise automatique ==="
+    echo "  $CKPT"
+    RESUME_ARG="--resume $CKPT"
+else
+    echo ""
+    echo "=== Pas de checkpoint — démarrage from scratch ==="
+fi
 
 # ── Lancement ─────────────────────────────────────────────────────────────────
 echo ""
@@ -93,23 +131,24 @@ echo "=== Lancement de l'entraînement ==="
 echo "  Démarré à : $(date)"
 
 python "$REPO/gnn/train_full_v1ld.py" \
-    --dataset          "$DATASET"           \
-    --n_val            "$N_VAL"             \
-    --data_dir         "$DATA_LOCAL"        \
-    --out_dir          "$OUT_DIR"           \
-    --n_epochs         "$N_EPOCHS"          \
-    --batch_size       "$BATCH_SIZE"        \
-    --lr               "$LR"               \
-    --eta_min          "$ETA_MIN"           \
-    --hidden           "$HIDDEN"            \
-    --train_frac       "$TRAIN_FRAC"        \
-    --seed             "$SEED"              \
-    --eval_every       "$EVAL_EVERY"        \
-    --eval_sample_size "$EVAL_SAMPLE_SIZE"  \
-    --final_eval_n_train "$FINAL_EVAL_N_TRAIN" \
-    --log_every        5                    \
-    --save_every       10                   \
-    --device           cpu
+    --dataset            "$DATASET"             \
+    --n_val              "$N_VAL"               \
+    --data_dir           "$DATA_LOCAL"          \
+    --out_dir            "$OUT_DIR"             \
+    --n_epochs           "$N_EPOCHS"            \
+    --batch_size         "$BATCH_SIZE"          \
+    --lr                 "$LR"                  \
+    --eta_min            "$ETA_MIN"             \
+    --hidden             "$HIDDEN"              \
+    --train_frac         "$TRAIN_FRAC"          \
+    --seed               "$SEED"               \
+    --eval_every         "$EVAL_EVERY"          \
+    --eval_sample_size   "$EVAL_SAMPLE_SIZE"    \
+    --final_eval_n_train "$FINAL_EVAL_N_TRAIN"  \
+    --log_every          5                      \
+    --save_every         10                     \
+    --device             "$DEVICE"              \
+    $RESUME_ARG
 
 echo ""
 echo "=== Terminé à : $(date) ==="
