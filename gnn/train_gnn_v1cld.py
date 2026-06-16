@@ -10,7 +10,7 @@ Format des fichiers d'entrée (générés par bab_mkp_gecode_collect) :
     A[i][j][k] pour i in N, j in m, k in n  (N*m*n valeurs)
 
   nodes_n{n}.txt — une ligne par nœud B&B collecté :
-    inst_id, depth, curr_cost, ub_node, incumbent,
+    inst_id, depth, curr_cost,
     x_mask[n]   (0=fixé_0, 1=fixé_1, 2=libre)
     z_mask[N]   (0=fixé_0, 1=fixé_1, 2=libre)
 
@@ -25,7 +25,7 @@ Structure du graphe produit (un graphe par nœud B&B) :
       • item varie    → poids 1/n_g
       • contrainte    → poids 1/m
       • scénario      → poids 1/N
-  - Contexte : [depth, frac_fixés, gap_rel, contrainte_serrée, curr_cost, epsilon, n_fixed_1_z/N]
+  - Contexte : [depth, frac_fixés, contrainte_serrée, curr_cost, epsilon, n_fixed_1_z/N]
   - Target   : implicite — minimiser L1(λ) la borne V1CLD
 """
 
@@ -107,7 +107,7 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
     Nœuds : N_z * m * n_g triplets (scénario_libre, contrainte, item_libre).
     Features (9) : [c_k, A_ijk, A_ijk/b_res, c_k/max(A_ijk,1), dantzig_rank, b_res/b, k/n_g, j/m, i/N_z]
     Indices normalisés ∈ [0,1] pour la généralisation cross-instance.
-    Contexte (7) : [depth, frac_fixed, gap_rel, tightest, curr_cost, epsilon, n_fixed_1_z/N]
+    Contexte (6) : [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_1_z/N]
 
     Retourne None si n_g == 0 ou N_z == 0.
     """
@@ -218,15 +218,12 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
     # ── Contexte (features au niveau du graphe) ───────────────────────────────
     depth      = float(node_rec["depth"])
     frac_fixed = 1.0 - n_g / n
-    incumbent  = node_rec["incumbent"]
-    ub_node    = node_rec["ub_node"]
-    gap_rel    = (ub_node - incumbent) / (abs(incumbent) + 1e-9) if incumbent > 1e-9 else 0.0
     b_orig_free = b[free_z, :]
     tightest   = float(np.min(b_res / np.maximum(b_orig_free, 1e-9)))
     curr_cost  = node_rec["curr_cost"]
 
     context = torch.tensor(
-        [depth, frac_fixed, gap_rel, tightest, curr_cost,
+        [depth, frac_fixed, tightest, curr_cost,
          float(inst["epsilon"]), n_fixed_1_z / N],
         dtype=torch.float32)
 
@@ -236,7 +233,6 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
         edge_weight = edge_weight,
         context     = context,
         opt         = torch.tensor(float(inst["opt"]), dtype=torch.float32),
-        ub_node     = torch.tensor(float(node_rec["ub_node"]), dtype=torch.float32),
         n_g         = n_g,
         N_z         = N_z,    # scénarios libres dans ce nœud
         N           = N,      # N original (pour les probabilités p_i = 1/N)
@@ -284,8 +280,6 @@ def load_dataset(
             inst_id  = int(vals[0])
             depth    = int(vals[1])
             curr_cost = vals[2]
-            ub_node  = vals[3]
-            incumbent = vals[4]
 
             if inst_id not in instances:
                 skipped += 1
@@ -294,18 +288,16 @@ def load_dataset(
             inst = instances[inst_id]
             n, N = inst["n"], inst["N"]
 
-            if len(vals) < 5 + n + N:
+            if len(vals) < 3 + n + N:
                 skipped += 1
                 continue
 
-            x_mask = np.array(vals[5       : 5 + n    ], dtype=np.int8)
-            z_mask = np.array(vals[5 + n   : 5 + n + N], dtype=np.int8)
+            x_mask = np.array(vals[3       : 3 + n    ], dtype=np.int8)
+            z_mask = np.array(vals[3 + n   : 3 + n + N], dtype=np.int8)
 
             node_rec = {
                 "depth":     depth,
                 "curr_cost": curr_cost,
-                "ub_node":   ub_node,
-                "incumbent": incumbent,
                 "x_mask":    x_mask,
                 "z_mask":    z_mask,
             }
@@ -333,17 +325,18 @@ class GNN(nn.Module):
     Le GNN retourne les valeurs brutes (pas de softplus) car λ ∈ R dans V1CLD.
 
     Architecture :
-      embed  : X(7) → 64 → ReLU → 64 → ReLU        (pas de bottleneck)
+      embed  : X(9) → 64 → ReLU → 64 → ReLU
       conv1  : GatedGraphConv(64, 2 it.) + LayerNorm
       conv2  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h1)
+      conv3  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h2)
       proj   : 64 → 256 → ReLU → 128      → h_v
-      pool   : mean_pool(h_v)             → g
+      pool   : nœud → knapsack(i,j) [mean] → graphe [mean]  (hiérarchique)
       head   : [h_v | g | context] → 64 → ReLU → 64 → ReLU → 1  → λ ∈ R
     """
     NODE_DIM    = 9   # [c, A, A/b_res, c/A, dantzig_rank, b_res/b, k/n_g, j/m, i/N_z]
-    CONTEXT_DIM = 7   # [depth, frac_fixed, gap_rel, tightest, curr_cost, epsilon, n_fixed_1_z/N]
+    CONTEXT_DIM = 6   # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_1_z/N]
 
-    def __init__(self, node_dim: int = 9, context_dim: int = 7):
+    def __init__(self, node_dim: int = 9, context_dim: int = 6):
         super().__init__()
         self.embed = nn.Sequential(
             nn.Linear(node_dim, 64), nn.ReLU(),
@@ -353,6 +346,8 @@ class GNN(nn.Module):
         self.norm1  = nn.LayerNorm(64)
         self.conv2  = GatedGraphConv(64, num_layers=2)
         self.norm2  = nn.LayerNorm(64)
+        self.conv3  = GatedGraphConv(64, num_layers=2)
+        self.norm3  = nn.LayerNorm(64)
         self.proj   = nn.Sequential(
             nn.Linear(64, 256), nn.ReLU(),
             nn.Linear(256, 128),
@@ -368,23 +363,51 @@ class GNN(nn.Module):
         batch = getattr(data, "batch", None)
         if batch is None:
             batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+        n_v = x.size(0)
+        dev = x.device
 
-        h  = self.embed(x)                     # (V, 64)
-        h1 = self.norm1(self.conv1(h,  ei, ew)) # (V, 64)
-        h2 = self.norm2(self.conv2(h1, ei, ew)) # (V, 64)
-        h2 = h2 + h1                             # skip
-        h_v = self.proj(h2)                      # (V, 128)
+        # ── Message passing ───────────────────────────────────────────────────
+        h  = self.embed(x)                           # (V, 64)
+        h1 = self.norm1(self.conv1(h,  ei, ew))      # (V, 64)
+        h2 = self.norm2(self.conv2(h1, ei, ew)) + h1 # (V, 64) + skip
+        h3 = self.norm3(self.conv3(h2, ei, ew)) + h2 # (V, 64) + skip
+        h_v = self.proj(h3)                           # (V, 128)
 
-        g     = global_mean_pool(h_v, batch)    # (B, 128)
-        g_exp = g[batch]                         # (V, 128)
+        # ── Pooling hiérarchique : nœud → knapsack (i,j) → graphe ────────────
+        # Les nœuds sont ordonnés i*(m*n_g) + j*n_g + k, donc n_g nœuds
+        # consécutifs forment un groupe (i,j). Fonctionne en mode single-graph
+        # et en mode batché (n_g constant sur le batch).
+        n_g = data.n_g if isinstance(data.n_g, int) else int(data.n_g.item())
+        n_graphs = int(batch.max().item()) + 1
+
+        # Indice local de chaque nœud dans son graphe (vectorisé)
+        counts   = torch.bincount(batch, minlength=n_graphs)       # (B,)
+        node_off = torch.zeros(n_graphs, dtype=torch.long, device=dev)
+        node_off[1:] = counts[:-1].cumsum(0)
+        local_idx = torch.arange(n_v, dtype=torch.long, device=dev) - node_off[batch]
+
+        # Indice global du groupe (i,j) pour chaque nœud
+        n_ij_per = counts // n_g                                    # (B,)
+        ij_off   = torch.zeros(n_graphs, dtype=torch.long, device=dev)
+        ij_off[1:] = n_ij_per[:-1].cumsum(0)
+        ij_batch = ij_off[batch] + local_idx // n_g                 # (V,)
+
+        # Niveau 1 : moyenne par knapsack (i,j)
+        h_ij = global_mean_pool(h_v, ij_batch)                     # (Σ N_z*m, 128)
+
+        # Niveau 2 : moyenne des knapsacks par graphe
+        ij_graph_batch = torch.repeat_interleave(
+            torch.arange(n_graphs, device=dev), n_ij_per)           # (Σ N_z*m,)
+        g     = global_mean_pool(h_ij, ij_graph_batch)             # (B, 128)
+        g_exp = g[batch]                                            # (V, 128)
 
         ctx = data.context
         if ctx.dim() == 1:
             ctx = ctx.unsqueeze(0)
-        ctx_exp = ctx[batch]                     # (V, context_dim)
+        ctx_exp = ctx[batch]                                        # (V, context_dim)
 
         cat = torch.cat([h_v, g_exp, ctx_exp], dim=-1)
-        lam = self.head(cat).squeeze(-1)         # (V,)  — λ ∈ R
+        lam = self.head(cat).squeeze(-1)                            # (V,)  — λ ∈ R
         return lam
 
 
@@ -545,14 +568,25 @@ def lagrangian_v1cld(lam: torch.Tensor, data: pyg_data.Data) -> torch.Tensor:
 # Overfit sur un graphe — validation de l'architecture
 # ─────────────────────────────────────────────────────────────────────────────
 
-def verify_v1cld(data: pyg_data.Data, T: int = 200) -> float:
+def verify_v1cld(
+    data: pyg_data.Data,
+    T: int = 500,
+    precision: float | None = None,
+    patience: int | None = None,
+    lam_init: np.ndarray | None = None,
+    return_n_iters: bool = False,
+) -> float | tuple[float, int]:
     """
     Reproduit l'algorithme de v1cld_solver.cpp en Python pur
-    (subgradient 1/√(t+1), cold start λ=0) et retourne la meilleure L1 vue.
+    (subgradient 1/√(t+1)) et retourne la meilleure L1 vue.
 
-    NOTE : pour les nœuds de profondeur 0, data.ub_node = obj_max = θ(λ=0)
-    (borne initiale Gecode, avant tout subgradient). La vraie borne V1CLD
-    est L1(λ=0) ≤ θ(λ=0), puis diminue au fil des itérations.
+    Args:
+        lam_init     : warm start (N_z, m, n_g) float64 ; None = cold start λ=0.
+        return_n_iters : si True, retourne (best_L1, n_iters_effectuées).
+
+    Arrêt anticipé : si precision et patience sont fournis, s'arrête dès que
+    la meilleure L1 n'a pas amélioré de plus de `precision` sur `patience`
+    itérations consécutives.
     """
     N_z = data.N_z
     N   = data.N
@@ -564,13 +598,15 @@ def verify_v1cld(data: pyg_data.Data, T: int = 200) -> float:
     b_np      = data.b_res_g.numpy() # (N_z, m)
     c_np      = data.c_g.numpy()     # (n_g,)
 
-    p_unif = 1.0 / N    # probabilité originale
+    p_unif = 1.0 / N
     inv_m  = 1.0 / m
     p_ij   = p_unif * inv_m
     required_prob = max(0.0, (1.0 - epsilon) - n_fixed_1_z * p_unif)
 
-    lam = np.zeros((N_z, m, n_g), dtype=np.float64)
+    lam = lam_init.copy() if lam_init is not None else np.zeros((N_z, m, n_g), dtype=np.float64)
     best = np.inf
+    no_improve = 0
+    n_iters = T
 
     for t in range(T):
         # (A) Λ_sum
@@ -604,7 +640,14 @@ def verify_v1cld(data: pyg_data.Data, T: int = 200) -> float:
 
         val = np.sum(p_unif * y_star * Delta)
         L1  = p_ij * theta_vals.sum() - val
-        if L1 < best: best = L1
+        if L1 < best - (precision or 0.0):
+            best = L1
+            no_improve = 0
+        else:
+            no_improve += 1
+        if patience is not None and precision is not None and no_improve >= patience:
+            n_iters = t + 1
+            break
 
         # (E) x̄
         active = y_star > 0.5
@@ -613,7 +656,7 @@ def verify_v1cld(data: pyg_data.Data, T: int = 200) -> float:
             for j in range(m):
                 x_bar += p_ij * (x_zeta[i, j] if active[i] else x_theta[i, j])
 
-        # (F) pas 1/√(t+1)
+        # (F) pas 1/√(t+1) — l'indice t est global même en warm start
         step = 1.0 / np.sqrt(t + 1)
 
         # (G) mise à jour λ
@@ -622,6 +665,8 @@ def verify_v1cld(data: pyg_data.Data, T: int = 200) -> float:
                 xij = x_zeta[i, j] if active[i] else x_theta[i, j]
                 lam[i, j] += step * (x_bar - xij)
 
+    if return_n_iters:
+        return best, n_iters
     return best
 
 
@@ -638,14 +683,14 @@ def overfit_one_graph(data: pyg_data.Data, n_epochs: int = 1000, lr: float = 1e-
         optimizer, T_max=n_epochs, eta_min=1e-5)
 
     opt_val = data.opt.item()
-    # L1(λ=0) comme référence de départ (pas ub_node qui est θ pour depth=0)
+    # L1(λ=0) comme référence de départ
     with torch.no_grad():
         lam0    = torch.zeros(data.N_z * data.m * data.n_g)
         l1_init = lagrangian_v1cld(lam0, data).item()
 
     print(f"\n{'='*60}")
     print(f"Overfit — n_g={data.n_g}  N={data.N}  m={data.m}")
-    print(f"  opt={opt_val:.2f}   L1(λ=0)={l1_init:.2f}   θ(λ=0)={data.ub_node.item():.2f}")
+    print(f"  opt={opt_val:.2f}   L1(λ=0)={l1_init:.2f}")
     print(f"  graphe : {data.x.shape[0]} nœuds, {data.edge_index.shape[1]} arêtes")
     print(f"{'='*60}")
     print(f"{'epoch':>6}  {'L1(λ_GNN)':>12}  {'gap_vs_opt%':>12}  {'gap_vs_L1_0%':>13}")
@@ -699,9 +744,7 @@ if __name__ == "__main__":
         # L1(λ=0) — référence de départ du subgradient
         lam0 = torch.zeros(g0.N_z * g0.m * g0.n_g)
         l1_init = lagrangian_v1cld(lam0, g0).item()
-        theta_0 = g0.ub_node.item()   # = obj_max = θ(λ=0) pour depth=0
         print(f"\n── Vérification V1CLD (T=200 itérations subgradient) ──")
-        print(f"  θ(λ=0) = obj_max   : {theta_0:.4f}  ← borne Gecode initiale (depth=0)")
         print(f"  L1(λ=0)            : {l1_init:.4f}  ← vraie borne Lagrangienne au départ")
         py_best = verify_v1cld(g0, T=200)
         print(f"  subgradient T=200  : {py_best:.4f}  ← meilleure L1 après 200 itérations")
