@@ -34,7 +34,7 @@ cd "$REPO_DIR"
 mkdir -p logs
 
 # ── Chemins (définis tôt pour la restauration) ────────────────────────────────
-MODE="v1cld"
+MODE="v1ld"
 LOCAL_OUTDIR="$SLURM_TMPDIR/train"
 LOCAL_RESULT="${LOCAL_OUTDIR}_${MODE}"
 DEST="$REPO_DIR/data/train_${MODE}"

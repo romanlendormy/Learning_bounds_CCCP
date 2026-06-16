@@ -37,7 +37,9 @@ data/knapsack/datasets-song-github
 data/knapsack/datasets-pisinger/
 data/knapsack/pisinger
 data/train_v1ld
+data/train_v1LD
 data/train_v1cld
+data/train_base
 data/ssp
 
 GNN_swann_darius
@@ -51,6 +53,8 @@ results/
 
 external/
 
-*.sh.vscode/
+.vscode/
 
 notebooks/
+
+gnn/*.png
