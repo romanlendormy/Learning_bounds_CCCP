@@ -49,6 +49,22 @@ DataLoader = importlib.import_module("torch_geometric.loader").DataLoader
 from torch_geometric.nn import GatedGraphConv
 from torch_geometric.nn import global_mean_pool
 
+# ── Solveur B&B C++ (optionnel, fallback Python si absent) ───────────────────
+import importlib.util as _ilu, pathlib as _pl
+_bnb_spec = _ilu.spec_from_file_location(
+    "bnb_solver", _pl.Path(__file__).parent / "bnb_solver.py"
+)
+try:
+    _bnb_mod = _ilu.module_from_spec(_bnb_spec)
+    _bnb_spec.loader.exec_module(_bnb_mod)
+    _cpp_solve_zeta_batch = _bnb_mod.solve_zeta_batch
+    _USE_CPP_BNB = True
+    print("[bnb_solver] C++ B&B chargé (solve_zeta_batch)")
+except Exception as _e:
+    _cpp_solve_zeta_batch = None
+    _USE_CPP_BNB = False
+    print(f"[bnb_solver] fallback Python B&B ({_e})")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chargement des instances
@@ -146,16 +162,20 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
     c_g     = c[active_x]                            # (n_g,)
     b_z     = b[free_z, :]                           # (N_z, m)
 
+    curr_cost   = node_rec["curr_cost"]
+    c_scale     = max(float(curr_cost) + float(c_g.sum()), 1.0)
+    b_orig_safe = np.maximum(b_z, 1e-9)
+
     # ── Features des nœuds (N_z * n_g, 5m + 3) ───────────────────────────────
     c_2d = np.broadcast_to(c_g[None, :], (N_z, n_g))   # (N_z, n_g)
 
     A_T    = A_g.transpose(0, 2, 1).copy()              # (N_z, n_g, m)
     bres_T = b_res_z[:, np.newaxis, :]                  # (N_z, 1, m)
 
-    f_c    = c_2d[:, :, None]                                                  # (N_z, n_g, 1)
-    f_A    = A_T                                                               # (N_z, n_g, m)
+    f_c    = c_2d[:, :, None] / c_scale                                        # (N_z, n_g, 1)
+    f_A    = A_T / b_orig_safe[:, np.newaxis, :]                               # (N_z, n_g, m)
     f_frac = A_T / np.maximum(np.broadcast_to(bres_T, (N_z, n_g, m)), 1e-9)   # (N_z, n_g, m)
-    f_eff  = c_2d[:, :, None] / np.maximum(A_T, 1.0)                          # (N_z, n_g, m)
+    f_eff  = (c_2d[:, :, None] / c_scale) / np.maximum(f_A, 1e-9)             # (N_z, n_g, m)
 
     eff_dantzig  = c_g[None, None, :] / np.maximum(A_g, 1e-9)                 # (N_z, m, n_g)
     dantzig_rank = (
@@ -176,58 +196,58 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
         [f_c, f_A, f_frac, f_eff, f_rank, f_cap, k_norm, i_norm], axis=-1
     ).reshape(-1, 5 * m + 3).astype(np.float32)                                # (N_z*n_g, 5m+3)
 
-    # ── Arêtes ────────────────────────────────────────────────────────────────
-    def flat(i_idx, k_idx):
-        return i_idx * n_g + k_idx
-
-    src_list, dst_list, w_list = [], [], []
+    # ── Arêtes (vectorisées) ──────────────────────────────────────────────────
+    i_all = np.arange(N_z, dtype=np.int64)
+    k_all = np.arange(n_g, dtype=np.int64)
 
     # 1. Item varie (même scénario i_idx) : poids 1/n_g
-    ki, kj = np.triu_indices(n_g, k=1)
-    for i in range(N_z):
-        a  = flat(i, ki);  b_ = flat(i, kj)
-        src_list.append(a);  dst_list.append(b_)
-        src_list.append(b_); dst_list.append(a)
-        w = np.full(len(a), 1.0 / n_g, dtype=np.float32)
-        w_list.append(w); w_list.append(w)
+    ki, kj   = np.triu_indices(n_g, k=1)
+    i_rep    = np.repeat(i_all, len(ki))
+    ki_rep   = np.tile(ki, N_z);  kj_rep = np.tile(kj, N_z)
+    src1_a   = i_rep * n_g + ki_rep;  src1_b = i_rep * n_g + kj_rep
+    src1     = np.concatenate([src1_a, src1_b])
+    dst1     = np.concatenate([src1_b, src1_a])
+    w1       = np.full(len(src1), 1.0 / n_g, dtype=np.float32)
 
     # 2. Scénario varie (même item k_idx) : poids 1/N_z
-    ii, ij = np.triu_indices(N_z, k=1)
-    for k in range(n_g):
-        a  = flat(ii, k);  b_ = flat(ij, k)
-        src_list.append(a);  dst_list.append(b_)
-        src_list.append(b_); dst_list.append(a)
-        w = np.full(len(a), 1.0 / N_z, dtype=np.float32)
-        w_list.append(w); w_list.append(w)
+    ii, ij   = np.triu_indices(N_z, k=1)
+    k_rep    = np.repeat(k_all, len(ii))
+    ii_rep   = np.tile(ii, n_g);  ij_rep = np.tile(ij, n_g)
+    src2_a   = ii_rep * n_g + k_rep;  src2_b = ij_rep * n_g + k_rep
+    src2     = np.concatenate([src2_a, src2_b])
+    dst2     = np.concatenate([src2_b, src2_a])
+    w2       = np.full(len(src2), 1.0 / N_z, dtype=np.float32)
 
     edge_index  = torch.tensor(
-        np.stack([np.concatenate(src_list), np.concatenate(dst_list)]),
+        np.stack([np.concatenate([src1, src2]), np.concatenate([dst1, dst2])]),
         dtype=torch.long)
-    edge_weight = torch.tensor(np.concatenate(w_list), dtype=torch.float32)
+    edge_weight = torch.tensor(np.concatenate([w1, w2]), dtype=torch.float32)
 
     # ── Contexte (features au niveau du graphe) ───────────────────────────────
-    depth      = float(node_rec["depth"])
-    frac_fixed = 1.0 - n_g / n
-    curr_cost  = node_rec["curr_cost"]
-    tightest   = float(np.min(cap_frac))
+    depth_norm     = float(node_rec["depth"]) / max(n, 1)
+    frac_fixed     = 1.0 - n_g / n
+    curr_cost_norm = float(curr_cost) / c_scale
+    tightest       = float(np.min(cap_frac))
 
     context = torch.tensor(
-        [depth, frac_fixed, tightest, curr_cost,
+        [depth_norm, frac_fixed, tightest, curr_cost_norm,
          float(inst["epsilon"]), n_fixed_z1 / N],
         dtype=torch.float32)
 
     return pyg_data.Data(
-        x           = torch.from_numpy(X),
-        edge_index  = edge_index,
-        edge_weight = edge_weight,
-        context     = context,
-        opt         = torch.tensor(float(inst["opt"]), dtype=torch.float32),
-        n_g         = n_g,
-        N           = N,
-        N_z         = N_z,
-        m           = m,
-        n_fixed_z1  = n_fixed_z1,
-        epsilon     = torch.tensor(float(inst["epsilon"]), dtype=torch.float32),
+        x             = torch.from_numpy(X),
+        edge_index    = edge_index,
+        edge_weight   = edge_weight,
+        context       = context,
+        opt           = torch.tensor(float(inst["opt"]), dtype=torch.float32),
+        curr_cost_raw = torch.tensor(float(curr_cost), dtype=torch.float32),
+        c_scale       = torch.tensor(c_scale, dtype=torch.float32),
+        n_g           = n_g,
+        N             = N,
+        N_z           = N_z,
+        m             = m,
+        n_fixed_z1    = n_fixed_z1,
+        epsilon       = torch.tensor(float(inst["epsilon"]), dtype=torch.float32),
         # Matrices pour le calcul de L1(λ) — scénarios libres seulement
         A_g     = torch.from_numpy(A_g.copy()),       # (N_z, m, n_g)
         b_res_g = torch.from_numpy(b_res_z.copy()),   # (N_z, m)
@@ -341,22 +361,191 @@ def load_dataset(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Chargement brut (sans construction PyG) + datasets lazy/eager
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_raw_nodes(
+    instances_file: str | Path,
+    nodes_file: str | Path,
+    max_records: Optional[int] = None,
+) -> tuple[dict, list]:
+    """
+    Parse instances + nœuds sans construire les graphes PyG.
+    Supporte Format B (5+n+N) et Format C (3+n+N, bab_mkp_gecode_base).
+    Retourne (instances_dict, raw_records).
+    """
+    instances = load_instances(instances_file)
+    records: list[dict] = []
+    skipped = 0
+
+    with open(nodes_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            vals = [float(x) for x in line.split(",")]
+            inst_id   = int(vals[0])
+            depth     = int(vals[1])
+            curr_cost = vals[2]
+
+            if inst_id not in instances:
+                skipped += 1
+                continue
+
+            inst = instances[inst_id]
+            n, N = inst["n"], inst["N"]
+
+            n_fmt_B = 5 + n + N
+            n_fmt_C = 3 + n + N
+
+            if len(vals) == n_fmt_C:
+                x_mask = np.array(vals[3 : 3 + n], dtype=np.int8)
+                z_mask = np.array(vals[3 + n : 3 + n + N], dtype=np.int8)
+            elif len(vals) >= n_fmt_B:
+                x_mask = np.array(vals[5 : 5 + n], dtype=np.int8)
+                z_mask = np.array(vals[5 + n : 5 + n + N], dtype=np.int8)
+            else:
+                skipped += 1
+                continue
+
+            if (x_mask == 2).sum() == 0 or (z_mask == 2).sum() == 0:
+                skipped += 1
+                continue
+
+            records.append({
+                "inst_id":   inst_id,
+                "depth":     depth,
+                "curr_cost": curr_cost,
+                "x_mask":    x_mask,
+                "z_mask":    z_mask,
+            })
+            if max_records and len(records) >= max_records:
+                break
+
+    print(f"[load_raw_nodes] {len(records)} enregistrements chargés, {skipped} ignorés")
+    return instances, records
+
+
+class LazyGraphDataset(torch.utils.data.Dataset):
+    """Dataset PyTorch qui construit les graphes PyG à la volée."""
+
+    def __init__(self, instances: dict, raw_records: list):
+        self.instances   = instances
+        self.raw_records = raw_records
+
+    def __len__(self) -> int:
+        return len(self.raw_records)
+
+    def __getitem__(self, idx: int) -> pyg_data.Data:
+        rec  = self.raw_records[idx]
+        inst = self.instances[rec["inst_id"]]
+
+        x_mask     = rec["x_mask"]
+        fixed_to_1 = np.where(x_mask == 1)[0]
+        b_res      = inst["b"].copy()
+        if len(fixed_to_1):
+            b_res -= inst["A"][:, :, fixed_to_1].sum(axis=2)
+
+        node_rec = {
+            "depth":     rec["depth"],
+            "curr_cost": rec["curr_cost"],
+            "x_mask":    x_mask,
+            "z_mask":    rec["z_mask"],
+            "b_res":     b_res,
+        }
+
+        g = build_graph(inst, node_rec)
+        if g is None:
+            raise ValueError(
+                f"build_graph a retourné None pour inst_id={rec['inst_id']} "
+                f"depth={rec['depth']} — ce record aurait dû être filtré."
+            )
+        g.inst_id = torch.tensor(rec["inst_id"], dtype=torch.long)
+        if "n_orig" in rec:
+            g.n_orig = torch.tensor(rec["n_orig"], dtype=torch.long)
+        return g
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def inst_ids(self) -> list[int]:
+        return [rec["inst_id"] for rec in self.raw_records]
+
+    def filter_by_inst_ids(self, ids_set: set) -> "LazyGraphDataset":
+        filtered = [rec for rec in self.raw_records if rec["inst_id"] in ids_set]
+        return LazyGraphDataset(self.instances, filtered)
+
+    def subset(self, start: int, stop: int) -> "LazyGraphDataset":
+        return LazyGraphDataset(self.instances, self.raw_records[start:stop])
+
+    def sample(self, n: int, rng: np.random.Generator) -> "LazyGraphDataset":
+        n = min(n, len(self))
+        idx = rng.choice(len(self), n, replace=False)
+        return LazyGraphDataset(self.instances, [self.raw_records[i] for i in idx])
+
+
+class EagerGraphDataset:
+    """Construit tous les graphes PyG en mémoire au démarrage."""
+
+    def __init__(self, lazy: LazyGraphDataset):
+        self.graphs:    list = []
+        self._inst_ids: list = []
+        self._depths:   list = []
+        n_skip = 0
+        for i in range(len(lazy)):
+            try:
+                g = lazy[i]
+            except Exception:
+                n_skip += 1
+                continue
+            self.graphs.append(g)
+            rec = lazy.raw_records[i]
+            self._inst_ids.append(rec["inst_id"])
+            self._depths.append(rec["depth"])
+        if n_skip:
+            print(f"  {n_skip} enregistrements ignorés (build_graph=None)", flush=True)
+
+    @classmethod
+    def _make(cls, graphs, inst_ids, depths):
+        obj = cls.__new__(cls)
+        obj.graphs     = list(graphs)
+        obj._inst_ids  = list(inst_ids)
+        obj._depths    = list(depths)
+        return obj
+
+    def __len__(self):          return len(self.graphs)
+    def __getitem__(self, idx): return self.graphs[idx]
+    def inst_ids(self):         return self._inst_ids
+
+    def filter_by_inst_ids(self, ids_set):
+        triples = [(g, i, d) for g, i, d in
+                   zip(self.graphs, self._inst_ids, self._depths)
+                   if i in ids_set]
+        if not triples:
+            return EagerGraphDataset._make([], [], [])
+        gs, ids, ds = zip(*triples)
+        return EagerGraphDataset._make(gs, ids, ds)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Modèle GNN
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GNN(nn.Module):
     """
     Prédit λ[i,k] ∈ R par nœud (scénario libre i, item actif k).
-    Le GNN retourne les valeurs brutes (pas de softplus) car λ ∈ R dans V1LD.
 
-    Architecture :
-      embed  : X(5m+3) → 64 → ReLU → 64 → ReLU
-      conv1  : GatedGraphConv(64, 2 it.) + LayerNorm
-      conv2  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h1)
-      conv3  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h2)
-      proj   : 64 → 256 → ReLU → 128          → h_v
-      pool   : nœud → scénario [mean] → graphe [mean]  (hiérarchique sur N_z)
-      head   : [h_v | g | context] → 64 → ReLU → 64 → ReLU → 1  → λ ∈ R
+    Architecture (v8 — meilleur cosine=0.090, pct_better=11%) :
+      embed      : X(5m+3) → hidden → ReLU → hidden → ReLU → LayerNorm
+      conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
+      conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
+      proj       : hidden → 4h → ReLU → 2h                    → h_v
+      pool scén  : nœud → scénario [mean]                      → h_scen_i
+      pool graph : scénario → graphe [mean uniforme]           → g_pool
+      norm_ctx   : LayerNorm sur les 6 features de contexte
+      head       : [h_v | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
 
     Paramètres :
       m (int) : nombre de contraintes (détermine NODE_DIM = 5m+3)
@@ -364,27 +553,29 @@ class GNN(nn.Module):
     """
     CONTEXT_DIM = 6  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N]
 
-    def __init__(self, m: int = 2, hidden: int = 64):
+    def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0):
         super().__init__()
-        self.m      = m
-        self.hidden = hidden
+        self.m       = m
+        self.hidden  = hidden
+        self.lam_max = lam_max
         node_dim    = 5 * m + 3
 
         self.embed = nn.Sequential(
             nn.Linear(node_dim, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),   nn.ReLU(),
         )
+        self.norm_embed = nn.LayerNorm(hidden)
         self.conv1 = GatedGraphConv(hidden, num_layers=2)
         self.norm1 = nn.LayerNorm(hidden)
         self.conv2 = GatedGraphConv(hidden, num_layers=2)
         self.norm2 = nn.LayerNorm(hidden)
-        self.conv3 = GatedGraphConv(hidden, num_layers=2)
-        self.norm3 = nn.LayerNorm(hidden)
         self.proj  = nn.Sequential(
             nn.Linear(hidden, 4 * hidden), nn.ReLU(),
             nn.Linear(4 * hidden, 2 * hidden),
         )
-        head_in = 2 * hidden + 2 * hidden + self.CONTEXT_DIM
+        self.norm_ctx = nn.LayerNorm(self.CONTEXT_DIM)
+        # h_v(2h) + h_scen_i(2h) + g_pool(2h) + ctx(6) = 390
+        head_in = 2 * hidden + 2 * hidden + 2 * hidden + self.CONTEXT_DIM
         self.head = nn.Sequential(
             nn.Linear(head_in, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),  nn.ReLU(),
@@ -401,11 +592,10 @@ class GNN(nn.Module):
         n_graphs = int(batch.max().item()) + 1
 
         # ── Message passing ───────────────────────────────────────────────────
-        h   = self.embed(x)
+        h   = self.norm_embed(self.embed(x))
         h1  = self.norm1(self.conv1(h,  ei, ew))
         h2  = self.norm2(self.conv2(h1, ei, ew)) + h1
-        h3  = self.norm3(self.conv3(h2, ei, ew)) + h2
-        h_v = self.proj(h3)                                        # (V, 2h)
+        h_v = self.proj(h2)                                        # (V, 2h)
 
         # ── Pooling hiérarchique : nœud → scénario → graphe ──────────────────
         # Nœuds ordonnés i_idx*n_g + k_idx ; n_g consécutifs = un scénario.
@@ -421,7 +611,8 @@ class GNN(nn.Module):
         scen_off[1:] = n_scen_per[:-1].cumsum(0)
         scen_batch = scen_off[batch] + local_idx // n_g            # (V,)
 
-        h_scen = global_mean_pool(h_v, scen_batch)                # (Σ N_z, 2h)
+        h_scen     = global_mean_pool(h_v, scen_batch)             # (Σ N_z, 2h)
+        h_scen_exp = h_scen[scen_batch]                            # (V, 2h)
 
         scen_graph_batch = torch.repeat_interleave(
             torch.arange(n_graphs, device=dev), n_scen_per)
@@ -431,10 +622,12 @@ class GNN(nn.Module):
         ctx = data.context
         if ctx.dim() == 1:
             ctx = ctx.unsqueeze(0)
-        ctx_exp = ctx[batch]                                       # (V, ctx_dim)
+        ctx_exp = self.norm_ctx(ctx)[batch]                        # (V, ctx_dim)
 
-        cat = torch.cat([h_v, g_exp, ctx_exp], dim=-1)
-        lam = self.head(cat).squeeze(-1)                          # (V,)  λ ∈ R
+        cat     = torch.cat([h_v, h_scen_exp, g_exp, ctx_exp], dim=-1)
+        h_out   = self.head(cat).squeeze(-1)
+        lam_raw = self.lam_max * torch.tanh(h_out) if self.lam_max > 0 else h_out
+        lam     = lam_raw * data.c_scale / float(data.N)
         return lam
 
 
@@ -588,11 +781,18 @@ def lagrangian_v1ld(lam: torch.Tensor, data: pyg_data.Data) -> torch.Tensor:
     bres_np = b_res_g.cpu().numpy()
 
     x_theta_np = (cost_np > 0).astype(np.float32)
-    x_zeta_np  = np.zeros_like(x_theta_np)
 
-    for i in range(N_z):
-        _, xz = _solve_zeta_multi_bb(cost_np[i], A_np[i], bres_np[i])
-        x_zeta_np[i] = xz
+    if _USE_CPP_BNB:
+        x_zeta_np = _cpp_solve_zeta_batch(
+            cost_np.astype(np.float64),
+            A_np.astype(np.float64),
+            bres_np.astype(np.float64),
+        )
+    else:
+        x_zeta_np = np.zeros_like(x_theta_np)
+        for i in range(N_z):
+            _, xz = _solve_zeta_multi_bb(cost_np[i], A_np[i], bres_np[i])
+            x_zeta_np[i] = xz
 
     # (C) Δ_i et y* greedy
     theta_np = np.sum(np.maximum(cost_np, 0.0), axis=1)
@@ -666,15 +866,22 @@ def verify_v1ld(
         cost = c_np + lam / p_unif - Lsum               # (N_z, n_g)
 
         x_theta    = (cost > 0).astype(np.float64)
-        x_zeta     = np.zeros_like(x_theta)
         theta_vals = np.sum(np.maximum(cost, 0), axis=1)
 
-        for i in range(N_z):
-            _, xz = _solve_zeta_multi_bb(
-                cost[i].astype(np.float32),
-                A_np[i].astype(np.float32),
-                b_np[i].astype(np.float32))
-            x_zeta[i] = xz.astype(np.float64)
+        if _USE_CPP_BNB:
+            x_zeta = _cpp_solve_zeta_batch(
+                cost.astype(np.float64),
+                A_np.astype(np.float64),
+                b_np.astype(np.float64),
+            ).astype(np.float64)
+        else:
+            x_zeta = np.zeros_like(x_theta)
+            for i in range(N_z):
+                _, xz = _solve_zeta_multi_bb(
+                    cost[i].astype(np.float32),
+                    A_np[i].astype(np.float32),
+                    b_np[i].astype(np.float32))
+                x_zeta[i] = xz.astype(np.float64)
 
         zeta_vals = np.sum(cost * x_zeta, axis=1)
         Delta     = np.maximum(0.0, theta_vals - zeta_vals)

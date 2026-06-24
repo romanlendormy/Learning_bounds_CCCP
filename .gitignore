@@ -55,3 +55,6 @@ external/
 notebooks/
 
 gnn/*.png
+
+# Checkpoints GNN (volumineux, recréables via les scripts d'entraînement)
+gnn/runs/

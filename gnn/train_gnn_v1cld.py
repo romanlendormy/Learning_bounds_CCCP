@@ -38,6 +38,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.data
 
 # Importer uniquement le sous-module nécessaire pour éviter le conflit
 # torch_geometric.datasets → transformers → tensorflow → NumPy 1.x
@@ -47,6 +48,22 @@ pyg_data = _pyg_data_mod
 DataLoader = importlib.import_module("torch_geometric.loader").DataLoader
 from torch_geometric.nn import GatedGraphConv
 from torch_geometric.nn import global_mean_pool
+
+# ── Solveur B&B C++ (optionnel, fallback Python si absent) ───────────────────
+import importlib.util as _ilu, pathlib as _pl
+_bnb_spec = _ilu.spec_from_file_location(
+    "bnb_solver", _pl.Path(__file__).parent / "bnb_solver.py"
+)
+try:
+    _bnb_mod = _ilu.module_from_spec(_bnb_spec)
+    _bnb_spec.loader.exec_module(_bnb_mod)
+    _cpp_solve_zeta_batch = _bnb_mod.solve_zeta_batch
+    _USE_CPP_BNB = True
+    print("[bnb_solver] C++ B&B chargé (solve_zeta_batch)")
+except Exception as _e:
+    _cpp_solve_zeta_batch = None
+    _USE_CPP_BNB = False
+    print(f"[bnb_solver] fallback Python B&B ({_e})")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -174,46 +191,58 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
         dantzig_rank, cap_frac_brd, k_idx, j_idx, i_idx,
     ], axis=-1).reshape(-1, 9).astype(np.float32)   # (N_z*m*n_g, 9)
 
-    # ── Arêtes ────────────────────────────────────────────────────────────────
-    def flat(i, j, k):
-        return i * (m * n_g) + j * n_g + k
+    # ── Arêtes (vectorisé — pas de boucles Python) ────────────────────────────
+    # Indice de nœud : flat(i,j,k) = i*(m*n_g) + j*n_g + k
 
-    src_list, dst_list, w_list = [], [], []
+    # 1. Item varie (même i,j) : poids 1/n_g
+    ki, kj   = np.triu_indices(n_g, k=1)                          # (E_k,)
+    E_k      = len(ki)
+    base_ij  = (np.repeat(np.arange(N_z, dtype=np.int64), m) * (m * n_g)
+                + np.tile(np.arange(m,   dtype=np.int64), N_z) * n_g)  # (N_z*m,)
+    base_rep = np.repeat(base_ij, E_k)
+    ki_rep   = np.tile(ki, N_z * m)
+    kj_rep   = np.tile(kj, N_z * m)
+    src1_a   = base_rep + ki_rep
+    src1_b   = base_rep + kj_rep
+    src1 = np.concatenate([src1_a, src1_b])
+    dst1 = np.concatenate([src1_b, src1_a])
+    w1   = np.full(len(src1), 1.0 / n_g, dtype=np.float32)
 
-    # 1. Item varie (même i, j) : poids 1/n_g
-    ki, kj = np.triu_indices(n_g, k=1)
-    for i in range(N_z):
-        for j in range(m):
-            a = flat(i, j, ki); b_ = flat(i, j, kj)
-            src_list.append(a); dst_list.append(b_)
-            src_list.append(b_); dst_list.append(a)
-            w = np.full(len(a), 1.0 / n_g, dtype=np.float32)
-            w_list.append(w); w_list.append(w)
+    # 2. Contrainte varie (même i,k) : poids 1/m
+    ji, jj   = np.triu_indices(m, k=1)                            # (E_j,)
+    E_j      = len(ji)
+    i_ik     = np.repeat(np.arange(N_z, dtype=np.int64), n_g)     # (N_z*n_g,)
+    k_ik     = np.tile(np.arange(n_g,   dtype=np.int64), N_z)
+    i_rep2   = np.repeat(i_ik, E_j)
+    k_rep2   = np.repeat(k_ik, E_j)
+    ji_rep   = np.tile(ji, N_z * n_g)
+    jj_rep   = np.tile(jj, N_z * n_g)
+    src2_a   = i_rep2 * (m * n_g) + ji_rep * n_g + k_rep2
+    src2_b   = i_rep2 * (m * n_g) + jj_rep * n_g + k_rep2
+    src2 = np.concatenate([src2_a, src2_b])
+    dst2 = np.concatenate([src2_b, src2_a])
+    w2   = np.full(len(src2), 1.0 / m, dtype=np.float32)
 
-    # 2. Contrainte varie (même i, k) : poids 1/m
-    ji, jj = np.triu_indices(m, k=1)
-    for i in range(N_z):
-        for k in range(n_g):
-            a = flat(i, ji, k); b_ = flat(i, jj, k)
-            src_list.append(a); dst_list.append(b_)
-            src_list.append(b_); dst_list.append(a)
-            w = np.full(len(a), 1.0 / m, dtype=np.float32)
-            w_list.append(w); w_list.append(w)
-
-    # 3. Scénario varie (même j, k) : poids 1/N_z
-    ii, ij = np.triu_indices(N_z, k=1)
-    for j in range(m):
-        for k in range(n_g):
-            a = flat(ii, j, k); b_ = flat(ij, j, k)
-            src_list.append(a); dst_list.append(b_)
-            src_list.append(b_); dst_list.append(a)
-            w = np.full(len(a), 1.0 / N_z, dtype=np.float32)
-            w_list.append(w); w_list.append(w)
+    # 3. Scénario varie (même j,k) : poids 1/N_z
+    ii, ij   = np.triu_indices(N_z, k=1)                          # (E_i,)
+    E_i      = len(ii)
+    j_jk     = np.repeat(np.arange(m,   dtype=np.int64), n_g)     # (m*n_g,)
+    k_jk     = np.tile(np.arange(n_g,   dtype=np.int64), m)
+    j_rep3   = np.repeat(j_jk, E_i)
+    k_rep3   = np.repeat(k_jk, E_i)
+    ii_rep   = np.tile(ii, m * n_g)
+    ij_rep   = np.tile(ij, m * n_g)
+    src3_a   = ii_rep * (m * n_g) + j_rep3 * n_g + k_rep3
+    src3_b   = ij_rep * (m * n_g) + j_rep3 * n_g + k_rep3
+    src3 = np.concatenate([src3_a, src3_b])
+    dst3 = np.concatenate([src3_b, src3_a])
+    w3   = np.full(len(src3), 1.0 / N_z, dtype=np.float32)
 
     edge_index  = torch.tensor(
-        np.stack([np.concatenate(src_list), np.concatenate(dst_list)]),
+        np.stack([np.concatenate([src1, src2, src3]),
+                  np.concatenate([dst1, dst2, dst3])]),
         dtype=torch.long)
-    edge_weight = torch.tensor(np.concatenate(w_list), dtype=torch.float32)
+    edge_weight = torch.tensor(np.concatenate([w1, w2, w3]), dtype=torch.float32)
 
     # ── Contexte (features au niveau du graphe) ───────────────────────────────
     depth      = float(node_rec["depth"])
@@ -316,6 +345,194 @@ def load_dataset(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Chargement lazy : enregistrements bruts + dataset à la volée
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_raw_nodes(
+    instances_file: str | Path,
+    nodes_file: str | Path,
+    max_records: Optional[int] = None,
+) -> tuple[dict, list]:
+    """
+    Parse le fichier de nœuds sans construire les graphes PyG.
+
+    Format unique (bab_mkp_gecode_base_collect) :
+      inst_id, depth, curr_cost, x_mask[n]{0/1/2}, z_mask[N]{0/1/2}
+      → 3 + n + N champs
+
+    Retourne (instances_dict, raw_records) où chaque raw_record est un dict
+    léger contenant uniquement les données brutes nécessaires pour reconstruire
+    le graphe à la demande via build_graph.
+    """
+    instances = load_instances(instances_file)
+    records: list[dict] = []
+    skipped = 0
+
+    with open(nodes_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            vals = [float(x) for x in line.split(",")]
+            inst_id   = int(vals[0])
+            depth     = int(vals[1])
+            curr_cost = vals[2]
+
+            if inst_id not in instances:
+                skipped += 1
+                continue
+
+            inst = instances[inst_id]
+            n, N = inst["n"], inst["N"]
+
+            if len(vals) != 3 + n + N:
+                skipped += 1
+                continue
+
+            x_mask = np.array(vals[3 : 3 + n], dtype=np.int8)
+            z_mask = np.array(vals[3 + n : 3 + n + N], dtype=np.int8)
+
+            if (x_mask == 2).sum() == 0 or (z_mask == 2).sum() == 0:
+                skipped += 1
+                continue
+
+            records.append({
+                "inst_id":   inst_id,
+                "depth":     depth,
+                "curr_cost": curr_cost,
+                "x_mask":    x_mask,
+                "z_mask":    z_mask,
+            })
+            if max_records and len(records) >= max_records:
+                break
+
+    print(f"[load_raw_nodes] {len(records)} enregistrements chargés, {skipped} ignorés")
+    return instances, records
+
+
+class LazyGraphDataset(torch.utils.data.Dataset):
+    """
+    Dataset PyTorch qui construit les graphes PyG à la volée.
+
+    Garde en RAM uniquement les enregistrements bruts (x_mask, z_mask).
+    Les Data objects sont créés à la demande via __getitem__ et libérés
+    par le GC après chaque utilisation.
+    """
+
+    def __init__(self, instances: dict, raw_records: list):
+        self.instances   = instances
+        self.raw_records = raw_records
+
+    def __len__(self) -> int:
+        return len(self.raw_records)
+
+    def __getitem__(self, idx: int) -> pyg_data.Data:
+        rec  = self.raw_records[idx]
+        inst = self.instances[rec["inst_id"]]
+
+        node_rec = {
+            "depth":     rec["depth"],
+            "curr_cost": rec["curr_cost"],
+            "x_mask":    rec["x_mask"],
+            "z_mask":    rec["z_mask"],
+        }
+
+        g = build_graph(inst, node_rec)
+        if g is None:
+            raise ValueError(
+                f"build_graph a retourné None pour inst_id={rec['inst_id']} "
+                f"depth={rec['depth']} — ce record aurait dû être filtré au chargement."
+            )
+        g.inst_id = torch.tensor(rec["inst_id"], dtype=torch.long)
+        return g
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def inst_ids(self) -> list[int]:
+        return [rec["inst_id"] for rec in self.raw_records]
+
+    def filter_by_inst_ids(self, ids_set: set) -> "LazyGraphDataset":
+        filtered = [rec for rec in self.raw_records if rec["inst_id"] in ids_set]
+        return LazyGraphDataset(self.instances, filtered)
+
+    def subset(self, start: int, stop: int) -> "LazyGraphDataset":
+        return LazyGraphDataset(self.instances, self.raw_records[start:stop])
+
+    def sample(self, n: int, rng: np.random.Generator) -> "LazyGraphDataset":
+        n = min(n, len(self))
+        idx = rng.choice(len(self), n, replace=False)
+        return LazyGraphDataset(self.instances, [self.raw_records[i] for i in idx])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dataset eager (graphes pré-construits en mémoire)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class EagerGraphDataset:
+    """Construit tous les graphes PyG en mémoire au démarrage."""
+
+    def __init__(self, lazy: LazyGraphDataset):
+        self.graphs:    list = []
+        self._inst_ids: list = []
+        self._depths:   list = []
+        n_skip = 0
+        for i in range(len(lazy)):
+            try:
+                g = lazy[i]
+            except Exception:
+                n_skip += 1
+                continue
+            self.graphs.append(g)
+            rec = lazy.raw_records[i]
+            self._inst_ids.append(rec["inst_id"])
+            self._depths.append(rec["depth"])
+        if n_skip:
+            print(f"  {n_skip} enregistrements ignorés (build_graph=None)", flush=True)
+
+    @classmethod
+    def _make(cls, graphs, inst_ids, depths):
+        obj = cls.__new__(cls)
+        obj.graphs     = list(graphs)
+        obj._inst_ids  = list(inst_ids)
+        obj._depths    = list(depths)
+        return obj
+
+    def __len__(self):          return len(self.graphs)
+    def __getitem__(self, idx): return self.graphs[idx]
+    def inst_ids(self):         return self._inst_ids
+
+    def filter_by_inst_ids(self, ids_set):
+        triples = [(g, i, d) for g, i, d in zip(self.graphs, self._inst_ids, self._depths)
+                   if i in ids_set]
+        if not triples:
+            return self._make([], [], [])
+        g, iid, d = zip(*triples)
+        return self._make(g, iid, d)
+
+    def subset(self, start, stop):
+        return self._make(self.graphs[start:stop],
+                          self._inst_ids[start:stop],
+                          self._depths[start:stop])
+
+    def sample(self, n, rng):
+        idx = rng.choice(len(self), min(n, len(self)), replace=False)
+        return self._make([self.graphs[i]    for i in idx],
+                          [self._inst_ids[i] for i in idx],
+                          [self._depths[i]   for i in idx])
+
+    def depth_filter(self, depth):
+        triples = [(g, i, d) for g, i, d in zip(self.graphs, self._inst_ids, self._depths)
+                   if d == depth]
+        if not triples:
+            return self._make([], [], [])
+        g, iid, d = zip(*triples)
+        return self._make(g, iid, d)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Modèle GNN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -328,7 +545,6 @@ class GNN(nn.Module):
       embed  : X(9) → 64 → ReLU → 64 → ReLU
       conv1  : GatedGraphConv(64, 2 it.) + LayerNorm
       conv2  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h1)
-      conv3  : GatedGraphConv(64, 2 it.) + LayerNorm + skip(h2)
       proj   : 64 → 256 → ReLU → 128      → h_v
       pool   : nœud → knapsack(i,j) [mean] → graphe [mean]  (hiérarchique)
       head   : [h_v | g | context] → 64 → ReLU → 64 → ReLU → 1  → λ ∈ R
@@ -346,8 +562,6 @@ class GNN(nn.Module):
         self.norm1  = nn.LayerNorm(64)
         self.conv2  = GatedGraphConv(64, num_layers=2)
         self.norm2  = nn.LayerNorm(64)
-        self.conv3  = GatedGraphConv(64, num_layers=2)
-        self.norm3  = nn.LayerNorm(64)
         self.proj   = nn.Sequential(
             nn.Linear(64, 256), nn.ReLU(),
             nn.Linear(256, 128),
@@ -370,8 +584,7 @@ class GNN(nn.Module):
         h  = self.embed(x)                           # (V, 64)
         h1 = self.norm1(self.conv1(h,  ei, ew))      # (V, 64)
         h2 = self.norm2(self.conv2(h1, ei, ew)) + h1 # (V, 64) + skip
-        h3 = self.norm3(self.conv3(h2, ei, ew)) + h2 # (V, 64) + skip
-        h_v = self.proj(h3)                           # (V, 128)
+        h_v = self.proj(h2)                           # (V, 128)
 
         # ── Pooling hiérarchique : nœud → knapsack (i,j) → graphe ────────────
         # Les nœuds sont ordonnés i*(m*n_g) + j*n_g + k, donc n_g nœuds
@@ -527,11 +740,22 @@ def lagrangian_v1cld(lam: torch.Tensor, data: pyg_data.Data) -> torch.Tensor:
     bres_np = b_res_g.cpu().numpy()
 
     x_theta_np = (cost_np > 0).astype(np.float32)
-    x_zeta_np  = np.zeros_like(x_theta_np)
-    for i in range(N_z):
-        for j in range(m):
-            _, x_z = _solve_zeta_bb(cost_np[i, j], A_np[i, j], bres_np[i, j])
-            x_zeta_np[i, j] = x_z
+
+    if _USE_CPP_BNB:
+        # Chaque (i,j) est un knapsack 1D indépendant.
+        # On les regroupe en (N_z*m) pseudo-scénarios à m=1 contrainte
+        # → solve_zeta_batch les résout tous en parallèle (OpenMP).
+        x_zeta_np = _cpp_solve_zeta_batch(
+            cost_np.reshape(N_z * m, n_g),
+            A_np.reshape(N_z * m, 1, n_g),
+            bres_np.reshape(N_z * m, 1),
+        ).reshape(N_z, m, n_g)
+    else:
+        x_zeta_np = np.zeros_like(x_theta_np)
+        for i in range(N_z):
+            for j in range(m):
+                _, x_z = _solve_zeta_bb(cost_np[i, j], A_np[i, j], bres_np[i, j])
+                x_zeta_np[i, j] = x_z
 
     # ── (C) Δ_i, sélection gloutonne y* ──────────────────────────────────────
     theta_np = np.sum(np.maximum(cost_np, 0.0), axis=2)   # (N_z, m)
