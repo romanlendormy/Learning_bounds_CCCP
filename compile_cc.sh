@@ -136,6 +136,7 @@ cmake --build "$BAB_BUILD" \
     --target bab_mkp_gecode \
     --target bab_mkp_gecode_collect \
     --target bab_mkp_gecode_base \
+    --target bab_mkp_gecode_base_collect \
     -j4
 
 [[ -f "$BAB_BUILD/bab_mkp_gecode" ]] || \
@@ -144,6 +145,8 @@ cmake --build "$BAB_BUILD" \
     { echo "ERREUR : bab_mkp_gecode_collect non généré"; exit 1; }
 [[ -f "$BAB_BUILD/bab_mkp_gecode_base" ]] || \
     { echo "ERREUR : bab_mkp_gecode_base non généré"; exit 1; }
+[[ -f "$BAB_BUILD/bab_mkp_gecode_base_collect" ]] || \
+    { echo "ERREUR : bab_mkp_gecode_base_collect non généré"; exit 1; }
 
 echo ""
 echo "======================================================================"
@@ -151,5 +154,6 @@ echo "  Compilation réussie !"
 echo "  Binaires : $BAB_BUILD/bab_mkp_gecode"
 echo "             $BAB_BUILD/bab_mkp_gecode_collect"
 echo "             $BAB_BUILD/bab_mkp_gecode_base"
+echo "             $BAB_BUILD/bab_mkp_gecode_base_collect"
 echo "  Prochaine étape : sbatch sweep_bab.sh  ou  sbatch collect_large.sh"
 echo "======================================================================"

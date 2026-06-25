@@ -16,14 +16,15 @@
 # OUT_DIR, l'entraînement repart de cet epoch — soumettre simplement le même
 # job une deuxième fois avec les mêmes paramètres.
 
-# ── Ressources SLURM — CHOISIR UN BLOC (décommenter l'un, commenter l'autre) ──
-
-# ---- Option A : CPU uniquement (recommandé — goulot est le B&B Python) -------
-#SBATCH --account=def-qcappart
+# ── Ressources SLURM ──────────────────────────────────────────────────────────
+#SBATCH --account=def-qcappart_gpu
+#SBATCH --partition=gpubase_bygpu_b3
+#SBATCH --chdir=/home/romanlen/projects/def-qcappart/romanl/Learning_bounds_CCCP
 #SBATCH --job-name=gnn_v1ld
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=12:00:00
+#SBATCH --mem=64G
+#SBATCH --time=03:00:00
+#SBATCH --gres=gpu:h100:1
 #SBATCH --output=logs/slurm_%x_%j.out
 #SBATCH --error=logs/slurm_%x_%j.err
 
@@ -44,9 +45,11 @@ set -euo pipefail
 
 # ── Paramètres d'entraînement ─────────────────────────────────────────────────
 # Valeurs par défaut ; surchargeable via --export depuis sbatch
-DATASET="${DATASET:-train_v1LD}"     # train_v1LD | train_base
+DATASET="${DATASET:-train_base}"     # train_v1LD | train_base
+M_FILTER="${M_FILTER:-5}"          # filtre sur m (vide = pas de filtre)
+MAX_N="${MAX_N:-500}"               # filtre N < MAX_N (vide = pas de filtre)
 N_VAL="${N_VAL:-10}"
-N_EPOCHS="${N_EPOCHS:-100}"
+N_EPOCHS="${N_EPOCHS:-1}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 LR="${LR:-1e-3}"
 ETA_MIN="${ETA_MIN:-1e-5}"
@@ -56,14 +59,16 @@ SEED="${SEED:-42}"
 EVAL_EVERY="${EVAL_EVERY:-10}"
 EVAL_SAMPLE_SIZE="${EVAL_SAMPLE_SIZE:-200}"
 FINAL_EVAL_N_TRAIN="${FINAL_EVAL_N_TRAIN:-1000}"
+# num_workers = CPUs alloués - 1 (1 CPU gardé pour le process principal)
+NUM_WORKERS="${NUM_WORKERS:-$(( ${SLURM_CPUS_PER_TASK:-4} - 1 ))}"
 
 # "auto" : cuda si dispo, sinon cpu.  Forcer "cpu" ou "cuda" si besoin.
 DEVICE="${DEVICE:-auto}"
 
 # ── Chemins ────────────────────────────────────────────────────────────────────
-REPO="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+REPO="${SLURM_SUBMIT_DIR:-$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )}"
 DATA_SRC="$REPO/data"
-OUT_DIR="$SCRATCH/gnn_results/${DATASET}_n${N_VAL}_ep${N_EPOCHS}_lr${LR}_h${HIDDEN}"
+OUT_DIR="$REPO/results/${DATASET}_n${N_VAL}_ep${N_EPOCHS}_lr${LR}_h${HIDDEN}"
 
 # Virtualenv Python (à adapter si ton env s'appelle autrement)
 VENV_PATH="$HOME/envs/learning_bounds"
@@ -130,24 +135,33 @@ echo ""
 echo "=== Lancement de l'entraînement ==="
 echo "  Démarré à : $(date)"
 
+M_ARG=""
+[[ -n "$M_FILTER" ]] && M_ARG="--m $M_FILTER"
+
+MAX_N_ARG=""
+[[ -n "$MAX_N" ]] && MAX_N_ARG="--max_N $MAX_N"
+
 python "$REPO/gnn/train_full_v1ld.py" \
-    --dataset            "$DATASET"             \
-    --n_val              "$N_VAL"               \
-    --data_dir           "$DATA_LOCAL"          \
-    --out_dir            "$OUT_DIR"             \
-    --n_epochs           "$N_EPOCHS"            \
-    --batch_size         "$BATCH_SIZE"          \
-    --lr                 "$LR"                  \
-    --eta_min            "$ETA_MIN"             \
-    --hidden             "$HIDDEN"              \
-    --train_frac         "$TRAIN_FRAC"          \
-    --seed               "$SEED"               \
-    --eval_every         "$EVAL_EVERY"          \
-    --eval_sample_size   "$EVAL_SAMPLE_SIZE"    \
-    --final_eval_n_train "$FINAL_EVAL_N_TRAIN"  \
-    --log_every          5                      \
-    --save_every         10                     \
-    --device             "$DEVICE"              \
+    --dataset            "$DATASET"              \
+    --n_val              "$N_VAL"                \
+    ${M_ARG}                                     \
+    ${MAX_N_ARG}                                 \
+    --data_dir           "$DATA_LOCAL"           \
+    --out_dir            "$OUT_DIR"              \
+    --n_epochs           "$N_EPOCHS"             \
+    --batch_size         "$BATCH_SIZE"           \
+    --lr                 "$LR"                   \
+    --eta_min            "$ETA_MIN"              \
+    --hidden             "$HIDDEN"               \
+    --train_frac         "$TRAIN_FRAC"           \
+    --seed               "$SEED"                 \
+    --eval_every         "$EVAL_EVERY"           \
+    --eval_sample_size   "$EVAL_SAMPLE_SIZE"     \
+    --final_eval_n_train "$FINAL_EVAL_N_TRAIN"   \
+    --num_workers        "$NUM_WORKERS"          \
+    --log_every          5                       \
+    --save_every         10                      \
+    --device             "$DEVICE"               \
     $RESUME_ARG
 
 echo ""

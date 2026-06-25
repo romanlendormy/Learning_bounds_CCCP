@@ -26,9 +26,11 @@ Structure du graphe produit (un graphe par nœud B&B) :
   - Nœuds   : N_z * n_g paires (scénario libre i_idx, item actif k_idx)
               indexé par i_idx * n_g + k_idx
   - Features : 5m + 3 :
-      [c_k, A_ijk(m), A_ijk/b_res(m), c_k/max(A_ijk,1)(m), dantzig_rank(m), b_res/b(m), k/n_g, i/N_z]
+      [c_k, A_ijk(m), clip(A_ijk/b_res,10)(m), log1p(c_k/A_ijk)(m), dantzig_rank(m), b_res/b(m),
+       min_j(b_res/b)_i, mean_j(b_res/b)_i]  ← 2 features scénario-niveau, court-circuitent le MP
+      (k/n_g et i/N_z supprimés : rangs arbitraires, brisent l'invariance par permutation)
   - Arêtes   : item_varies (poids 1/n_g), scenario_varies (poids 1/N_z)
-  - Contexte : [depth, frac_fixés, 0, tightest, curr_cost, epsilon, n_fixed_z1/N]
+  - Contexte : [depth, frac_fixés, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(N_z), N_z/n_g]
   - Target   : minimiser L1(λ) la borne V1LD
 """
 
@@ -37,6 +39,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -47,7 +50,7 @@ _pyg_data_mod = importlib.import_module("torch_geometric.data")
 pyg_data = _pyg_data_mod
 DataLoader = importlib.import_module("torch_geometric.loader").DataLoader
 from torch_geometric.nn import GatedGraphConv
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_mean_pool, global_max_pool
 
 # ── Solveur B&B C++ (optionnel, fallback Python si absent) ───────────────────
 import importlib.util as _ilu, pathlib as _pl
@@ -127,8 +130,8 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
       → n_fixed_z1 = count(z_mask == 1)
 
     Nœuds : N_z × n_g paires (scénario libre, item actif).
-    Features (5m + 3) : [c_k, A_ijk(m), A_ijk/b_res(m), c/A(m),
-                          dantzig_rank(m), b_res/b(m), k/n_g, i/N_z]
+    Features (5m + 3) : [c_k, A_ijk(m), clip(A_ijk/b_res,10)(m), log1p(c_k/A_ijk)(m),
+                          dantzig_rank(m), b_res/b(m), min_j(b_res/b)_i, mean_j(b_res/b)_i]
     Arêtes : item_varies (poids 1/n_g), scenario_varies (poids 1/N_z).
 
     Retourne None si n_g == 0 ou N_z == 0.
@@ -174,8 +177,11 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
 
     f_c    = c_2d[:, :, None] / c_scale                                        # (N_z, n_g, 1)
     f_A    = A_T / b_orig_safe[:, np.newaxis, :]                               # (N_z, n_g, m)
-    f_frac = A_T / np.maximum(np.broadcast_to(bres_T, (N_z, n_g, m)), 1e-9)   # (N_z, n_g, m)
-    f_eff  = (c_2d[:, :, None] / c_scale) / np.maximum(f_A, 1e-9)             # (N_z, n_g, m)
+    f_frac = np.minimum(
+        A_T / np.maximum(np.broadcast_to(bres_T, (N_z, n_g, m)), 1e-9),
+        10.0)                                                                    # (N_z, n_g, m) clippé à 10
+    f_eff  = np.log1p(
+        (c_2d[:, :, None] / c_scale) / np.maximum(f_A, 1e-9))                 # (N_z, n_g, m) log(1+eff)
 
     eff_dantzig  = c_g[None, None, :] / np.maximum(A_g, 1e-9)                 # (N_z, m, n_g)
     dantzig_rank = (
@@ -187,14 +193,40 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
     cap_frac = b_res_z / np.maximum(b_z, 1e-9)                                # (N_z, m)
     f_cap    = np.broadcast_to(cap_frac[:, None, :], (N_z, n_g, m)).copy()    # (N_z, n_g, m)
 
-    k_norm = np.broadcast_to(
-        np.arange(n_g)[None, :, None] / n_g, (N_z, n_g, 1)).copy()            # (N_z, n_g, 1)
-    i_norm = np.broadcast_to(
-        np.arange(N_z)[:, None, None] / N_z, (N_z, n_g, 1)).copy()            # (N_z, n_g, 1)
+    # Features scénario-niveau : min et mean de cap_frac sur les contraintes j.
+    # Même valeur pour tous les items k d'un même scénario i → le head peut
+    # différencier les λ par scénario sans dépendre du message-passing.
+    scen_min_cap  = cap_frac.min(axis=1)                                        # (N_z,)
+    scen_mean_cap = cap_frac.mean(axis=1)                                       # (N_z,)
+    f_scen_min  = np.broadcast_to(
+        scen_min_cap[:, None, None],  (N_z, n_g, 1)).copy()                    # (N_z, n_g, 1)
+    f_scen_mean = np.broadcast_to(
+        scen_mean_cap[:, None, None], (N_z, n_g, 1)).copy()                    # (N_z, n_g, 1)
+
+    # Features item-niveau : moyenne et écart-type de f_A sur les scénarios i.
+    # Capturent la "difficulté universelle" de l'item k dans la contrainte j,
+    # indépendamment du scénario courant.
+    f_A_mean_scen = np.broadcast_to(
+        f_A.mean(axis=0)[None, :, :], (N_z, n_g, m)).copy()                   # (N_z, n_g, m)
+    f_A_std_scen  = np.broadcast_to(
+        f_A.std(axis=0)[None, :, :],  (N_z, n_g, m)).copy()                   # (N_z, n_g, m)
+
+    # Features scénario-niveau : std et count de saturation de cap_frac sur j.
+    # Caractérisent "à quel point ce scénario est difficile à couvrir",
+    # information clé pour la sélection y* dans la borne V1LD.
+    cap_std_scen = cap_frac.std(axis=1)                                        # (N_z,)
+    cap_sat_scen = (cap_frac < 0.1).sum(axis=1).astype(np.float32) / m        # (N_z,) normalisé ∈[0,1]
+    f_cap_std_scen = np.broadcast_to(
+        cap_std_scen[:, None, None], (N_z, n_g, 1)).copy()                    # (N_z, n_g, 1)
+    f_cap_sat_scen = np.broadcast_to(
+        cap_sat_scen[:, None, None], (N_z, n_g, 1)).copy()                    # (N_z, n_g, 1)
 
     X = np.concatenate(
-        [f_c, f_A, f_frac, f_eff, f_rank, f_cap, k_norm, i_norm], axis=-1
-    ).reshape(-1, 5 * m + 3).astype(np.float32)                                # (N_z*n_g, 5m+3)
+        [f_c, f_A, f_frac, f_eff, f_rank, f_cap,
+         f_scen_min, f_scen_mean,
+         f_A_mean_scen, f_A_std_scen,
+         f_cap_std_scen, f_cap_sat_scen], axis=-1
+    ).reshape(-1, 7 * m + 5).astype(np.float32)                                # (N_z*n_g, 7m+5)
 
     # ── Arêtes (vectorisées) ──────────────────────────────────────────────────
     i_all = np.arange(N_z, dtype=np.int64)
@@ -231,7 +263,8 @@ def build_graph(inst: dict, node_rec: dict) -> Optional[pyg_data.Data]:
 
     context = torch.tensor(
         [depth_norm, frac_fixed, tightest, curr_cost_norm,
-         float(inst["epsilon"]), n_fixed_z1 / N],
+         float(inst["epsilon"]), n_fixed_z1 / N,
+         float(np.log(n_g)), float(np.log(N_z)), float(N_z) / float(n_g)],
         dtype=torch.float32)
 
     return pyg_data.Data(
@@ -537,28 +570,32 @@ class GNN(nn.Module):
     """
     Prédit λ[i,k] ∈ R par nœud (scénario libre i, item actif k).
 
-    Architecture (v8 — meilleur cosine=0.090, pct_better=11%) :
-      embed      : X(5m+3) → hidden → ReLU → hidden → ReLU → LayerNorm
+    Architecture (v17 — 5m+3 node features, context 9-dim, max_pool optionnel) :
+      embed      : X(5m+5) → hidden → ReLU → hidden → ReLU → LayerNorm
       conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
       conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
       proj       : hidden → 4h → ReLU → 2h                    → h_v
-      pool scén  : nœud → scénario [mean]                      → h_scen_i
+      pool scén  : nœud → scénario [mean] (+ [max] si use_max_pool) → h_scen_i
       pool graph : scénario → graphe [mean uniforme]           → g_pool
       norm_ctx   : LayerNorm sur les 6 features de contexte
       head       : [h_v | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
 
     Paramètres :
-      m (int) : nombre de contraintes (détermine NODE_DIM = 5m+3)
-      hidden  : dimension des couches cachées (défaut 64)
+      m (int)           : nombre de contraintes (détermine NODE_DIM = 7m+5)
+      hidden            : dimension des couches cachées (défaut 64)
+      use_max_pool (bool) : si True, pool scén = [mean | max] (capte les scénarios
+                            les plus contraints, critiques pour la couverture)
     """
-    CONTEXT_DIM = 6  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N]
+    CONTEXT_DIM = 9  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(N_z), N_z/n_g]
 
-    def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0):
+    def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0,
+                 use_max_pool: bool = False):
         super().__init__()
-        self.m       = m
-        self.hidden  = hidden
-        self.lam_max = lam_max
-        node_dim    = 5 * m + 3
+        self.m            = m
+        self.hidden       = hidden
+        self.lam_max      = lam_max
+        self.use_max_pool = use_max_pool
+        node_dim    = 7 * m + 5
 
         self.embed = nn.Sequential(
             nn.Linear(node_dim, hidden), nn.ReLU(),
@@ -574,8 +611,10 @@ class GNN(nn.Module):
             nn.Linear(4 * hidden, 2 * hidden),
         )
         self.norm_ctx = nn.LayerNorm(self.CONTEXT_DIM)
-        # h_v(2h) + h_scen_i(2h) + g_pool(2h) + ctx(6) = 390
-        head_in = 2 * hidden + 2 * hidden + 2 * hidden + self.CONTEXT_DIM
+        # pool scén : 2h (mean seul) ou 4h (mean+max)
+        scen_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
+        # h_v(2h) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(6)
+        head_in = 2 * hidden + scen_pool_dim + 2 * hidden + self.CONTEXT_DIM
         self.head = nn.Sequential(
             nn.Linear(head_in, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),  nn.ReLU(),
@@ -611,12 +650,16 @@ class GNN(nn.Module):
         scen_off[1:] = n_scen_per[:-1].cumsum(0)
         scen_batch = scen_off[batch] + local_idx // n_g            # (V,)
 
-        h_scen     = global_mean_pool(h_v, scen_batch)             # (Σ N_z, 2h)
-        h_scen_exp = h_scen[scen_batch]                            # (V, 2h)
+        h_scen_mean = global_mean_pool(h_v, scen_batch)              # (Σ N_z, 2h)
+        if self.use_max_pool:
+            h_scen_max = global_max_pool(h_v, scen_batch)         # (Σ N_z, 2h)
+            h_scen = torch.cat([h_scen_mean, h_scen_max], dim=-1) # (Σ N_z, 4h)
+        else:
+            h_scen = h_scen_mean                                   # (Σ N_z, 2h)
+        h_scen_exp = h_scen[scen_batch]                            # (V, 2h or 4h)
 
-        scen_graph_batch = torch.repeat_interleave(
-            torch.arange(n_graphs, device=dev), n_scen_per)
-        g_pool  = global_mean_pool(h_scen, scen_graph_batch)      # (B, 2h)
+        # g_pool : résumé global de tous les nœuds (toujours 2h, indépendant de use_max_pool)
+        g_pool  = global_mean_pool(h_v, batch)                     # (B, 2h)
         g_exp   = g_pool[batch]                                    # (V, 2h)
 
         ctx = data.context
@@ -835,7 +878,8 @@ def verify_v1ld(
     patience:  int | None   = None,
     lam_init:  np.ndarray | None = None,
     return_n_iters: bool = False,
-) -> float | tuple[float, int]:
+    return_lam: bool = False,
+) -> float | tuple:
     """
     Reproduit l'algorithme v1ld_solver.cpp en Python pur (pas 1/√(t+1))
     et retourne la meilleure L1 vue.
@@ -858,6 +902,7 @@ def verify_v1ld(
            else np.zeros((N_z, n_g), dtype=np.float64))
 
     best       = np.inf
+    best_lam   = lam.copy()
     no_improve = 0
     n_iters    = T
 
@@ -900,7 +945,7 @@ def verify_v1ld(
         L1 = p_unif * theta_vals.sum() - p_unif * (y_star * Delta).sum()
 
         if L1 < best - (precision or 0.0):
-            best = L1; no_improve = 0
+            best = L1; best_lam = lam.copy(); no_improve = 0
         else:
             no_improve += 1
         if patience is not None and precision is not None and no_improve >= patience:
@@ -918,6 +963,10 @@ def verify_v1ld(
             xi = x_zeta[i] if y_star[i] > 0.5 else x_theta[i]
             lam[i] += step * (x_bar - xi)
 
+    if return_n_iters and return_lam:
+        return best, n_iters, best_lam
+    if return_lam:
+        return best, best_lam
     if return_n_iters:
         return best, n_iters
     return best

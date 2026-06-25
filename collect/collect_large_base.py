@@ -8,16 +8,14 @@ bab_mkp_gecode_collect. Le pruning repose uniquement sur la propagation CP de Ge
 Format de sortie des nœuds (Format C — sans ub_node ni incumbent) :
   inst_id, depth, curr_cost, x_mask[n], z_mask[N]  (3 + n + N champs)
 
-Les résultats s'accumulent dans :
-  <outdir>_base/instances_n{n}.txt
-  <outdir>_base/nodes_n{n}.txt
+Les résultats s'accumulent dans des fichiers suffixés par la valeur de m :
+  <outdir>_base/instances_n{n}_m{m}.txt
+  <outdir>_base/nodes_n{n}_m{m}.txt
+  <outdir>_base/seeds_done_n{n}_m{m}.txt
 
-Note : le chargeur (load_dataset dans train_gnn_v1*.py) doit supporter le Format C
-pour lire ces fichiers. Ajouter la détection :
-  n_fmt_C = 3 + n + N
-  if len(vals) == n_fmt_C:
-      x_mask = vals[3 : 3 + n]
-      z_mask = vals[3 + n : 3 + n + N]
+Le binaire C++ écrit d'abord dans les fichiers génériques (instances_n{n}.txt,
+nodes_n{n}.txt) ; le script Python redirige aussitôt les nouvelles lignes vers
+les fichiers _m{m} correspondants.
 
 Usage :
   python collect_large_base.py \\
@@ -112,6 +110,31 @@ def collect_instance(tmpfile, epsilons, args):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers pour rediriger les nouvelles lignes vers les fichiers _m{m}
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _count_lines(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with open(path) as f:
+        return sum(1 for _ in f)
+
+
+def _append_new_lines(src: Path, dst: Path, lines_before: int) -> int:
+    """Copie dans dst les lignes ajoutées à src depuis lines_before."""
+    if not src.exists():
+        return 0
+    with open(src) as f:
+        all_lines = f.readlines()
+    new_lines = all_lines[lines_before:]
+    if not new_lines:
+        return 0
+    with open(dst, "a") as f:
+        f.writelines(new_lines)
+    return len(new_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -148,7 +171,17 @@ def main():
 
     outdir = Path(f"{args.outdir}_base")
     outdir.mkdir(parents=True, exist_ok=True)
-    progress_file = outdir / f"seeds_done_n{args.n}.txt"
+
+    # Fichiers génériques écrits par le binaire C++ (staging)
+    inst_generic  = outdir / f"instances_n{args.n}.txt"
+    nodes_generic = outdir / f"nodes_n{args.n}.txt"
+
+    # Fichiers cibles suffixés par m
+    inst_m  = outdir / f"instances_n{args.n}_m{args.m}.txt"
+    nodes_m = outdir / f"nodes_n{args.n}_m{args.m}.txt"
+
+    # Fichier de progression spécifique à m (évite les conflits entre runs parallèles)
+    progress_file = outdir / f"seeds_done_n{args.n}_m{args.m}.txt"
 
     done_seeds: set[int] = set()
     if progress_file.exists():
@@ -169,7 +202,7 @@ def main():
     print(f"  à traiter    : {len(todo)}  ({len(done_seeds)} déjà faites)")
     print(f"  epsilon      : {args.epsilon}")
     print(f"  max_depth    : {args.max_depth}")
-    print(f"  sortie       : {outdir}/  (Format C — sans ub_node/incumbent)")
+    print(f"  sortie       : {inst_m.name}, {nodes_m.name}")
     print("=" * 60)
 
     solved_total  = 0
@@ -177,6 +210,10 @@ def main():
 
     for i, seed in enumerate(todo):
         print(f"\n[{i+1}/{len(todo)}] seed={seed}", flush=True)
+
+        # Lignes déjà présentes dans les fichiers génériques avant cet appel
+        inst_before  = _count_lines(inst_generic)
+        nodes_before = _count_lines(nodes_generic)
 
         tmpfile = generate_song_tempfile(
             args.n, args.m, args.N, seed,
@@ -188,6 +225,13 @@ def main():
             skipped_total += k
             status = f"OK ({s}/{len(args.epsilon)} eps)" if k == 0 else f"{s} OK, {k} ignorés"
             print(f"  -> {status}")
+
+            # Rediriger les nouvelles lignes vers les fichiers _m{m}
+            n_inst  = _append_new_lines(inst_generic,  inst_m,  inst_before)
+            n_nodes = _append_new_lines(nodes_generic, nodes_m, nodes_before)
+            if n_inst or n_nodes:
+                print(f"     +{n_inst} instances, +{n_nodes} nœuds → _m{args.m}")
+
             with open(progress_file, "a") as pf:
                 pf.write(f"{seed}\n")
         finally:

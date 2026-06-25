@@ -20,7 +20,7 @@
 #SBATCH --job-name=collect_large
 #SBATCH --output=logs/collect_large_%j.out
 #SBATCH --error=logs/collect_large_%j.err
-#SBATCH --time=03:30:00
+#SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --account=def-qcappart
@@ -98,10 +98,10 @@ echo "  sync toutes les 10 min vers : ${DEST}/"
 echo ""
 
 python collect/collect_large.py \
-    --n 20 \
+    --n 10 \
     --m 5 \
-    --N 100 \
-    --n_instances 5 \
+    --N 500 \
+    --n_instances 100 \
     --epsilon 0.1 0.2 0.3 \
     --correlation weakly_correlated \
     --mode "$MODE" \

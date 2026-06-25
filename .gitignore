@@ -38,6 +38,9 @@ data/knapsack/datasets-pisinger/
 data/knapsack/pisinger
 data/train_v1cld
 data/ssp
+data/train_base/
+data/train_base_s30/
+data/train_N*/
 
 GNN_swann_darius
 
