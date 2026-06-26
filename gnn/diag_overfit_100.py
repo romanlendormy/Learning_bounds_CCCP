@@ -76,7 +76,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eta_min",      type=float, default=1e-5)
     p.add_argument("--hidden",       type=int,   default=64)
     p.add_argument("--m",            type=int,   default=5)
-    p.add_argument("--max_norm",     type=float, default=0.5)
+    p.add_argument("--max_norm",     type=float, default=0.0,
+                   help="Clip global sur le gradient moyen du batch. 0 = pas de clip (défaut v12).")
     p.add_argument("--seed",         type=int,   default=42)
     p.add_argument("--n_cosine",     type=int,   default=20,
                    help="Instances pour la matrice cosine (stratifié par n).")
@@ -93,6 +94,17 @@ def parse_args() -> argparse.Namespace:
                    help="Coefficient de régularisation L2 sur λ (loss += alpha * mean(λ²)).")
     p.add_argument("--lam_max",      type=float, default=0.0,
                    help="Borne tanh sur la sortie du GNN : λ ∈ (-lam_max, lam_max). 0 = non borné.")
+    p.add_argument("--n_warmup",     type=int,   default=0,
+                   help="Epochs de pré-entraînement supervisé (L2 sur λ* sous-gradient). 0 = désactivé.")
+    p.add_argument("--warmup_lr",    type=float, default=1e-3,
+                   help="Learning rate pour la phase warmup supervisé (défaut plus élevé que lr).")
+    p.add_argument("--warmup_T",     type=int,   default=50,
+                   help="Itérations sous-gradient pour générer les cibles du warmup.")
+    p.add_argument("--use_max_pool", action="store_true",
+                   help="Pool scénario = [mean | max] au lieu de [mean] seul "
+                        "(capte les scénarios les plus contraints).")
+    p.add_argument("--use_theta_attn", action="store_true",
+                   help="Pool graphe attentionnel pondéré par θ_i (v20).")
     p.add_argument("--device",        default="auto", choices=["auto", "cpu", "cuda"])
     return p.parse_args()
 
@@ -184,7 +196,7 @@ def gradient_vector(model: GNN, g, opt_val: float) -> np.ndarray:
     model.train()
     model.zero_grad()
     lam  = model(g)
-    loss = lagrangian_v1ld(lam, g) / max(abs(opt_val), 1.0)
+    loss = lagrangian_v1ld(lam, g) / max(float(g.c_scale), 1.0)
     loss.backward()
     vecs = [p.grad.detach().flatten() for p in model.parameters()
             if p.grad is not None]
@@ -247,14 +259,17 @@ def main() -> None:
         print(f"  n={nv}: {cnt} graphes")
 
     # ── 3. Modèle + optimiseur ────────────────────────────────────────────────
-    model     = GNN(m=args.m, hidden=args.hidden, lam_max=args.lam_max).to(device)
+    model     = GNN(m=args.m, hidden=args.hidden, lam_max=args.lam_max,
+                    use_max_pool=args.use_max_pool,
+                    use_theta_attn=args.use_theta_attn).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.n_epochs, eta_min=args.eta_min,
     )
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[diag] GNN : {n_params:,} params  lr={args.lr}  epochs={args.n_epochs}  "
-          f"batch={args.batch_size}  max_norm={args.max_norm}")
+          f"batch={args.batch_size}  max_norm={args.max_norm}  "
+          f"use_max_pool={args.use_max_pool}  use_theta_attn={args.use_theta_attn}")
 
     # ── 4. Historique par instance ────────────────────────────────────────────
     hist_epochs: list          = []
@@ -270,7 +285,60 @@ def main() -> None:
                 hist_lam[gi].append(lam.abs().mean().item())
         model.train()
 
-    # ── 5. Boucle d'entraînement ──────────────────────────────────────────────
+    # ── 5. Warmup supervisé (L2 sur λ* sous-gradient) ────────────────────────
+    if args.n_warmup > 0:
+        print(f"\n[warmup] Génération cibles sous-gradient (T={args.warmup_T}) "
+              f"sur {n_total} graphes ...", flush=True)
+        t_wm = time.perf_counter()
+        lam_targets = []
+        for gi, g in enumerate(graphs_dev):
+            g_cpu = g.cpu()
+            _, lam_star = verify_v1ld(g_cpu, T=args.warmup_T, return_lam=True)
+            lam_targets.append(
+                torch.tensor(lam_star.astype(np.float32).flatten(),
+                             dtype=torch.float32, device=device))
+        print(f"[warmup] Cibles prêtes en {time.perf_counter()-t_wm:.1f}s  "
+              f"|λ*| mean={np.mean([t.abs().mean().item() for t in lam_targets]):.4f}")
+
+        opt_wm   = torch.optim.Adam(model.parameters(), lr=args.warmup_lr)
+        sched_wm = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt_wm, T_max=args.n_warmup, eta_min=1e-5)
+
+        print(f"[warmup] {args.n_warmup} epochs supervisés (lr={args.warmup_lr}) ...",
+              flush=True)
+        t_wm = time.perf_counter()
+        wm_indices = list(range(n_total))
+        for wm_ep in range(1, args.n_warmup + 1):
+            random.shuffle(wm_indices)
+            mse_sum = 0.0
+            for gi in wm_indices:
+                g   = graphs_dev[gi]
+                opt_wm.zero_grad()
+                lam_pred = model(g)
+                loss_wm  = ((lam_pred - lam_targets[gi]) ** 2).mean()
+                loss_wm.backward()
+                if args.max_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                                   max_norm=args.max_norm)
+                opt_wm.step()
+                mse_sum += loss_wm.item()
+            sched_wm.step()
+            if wm_ep % args.eval_every == 0 or wm_ep == args.n_warmup:
+                # Mesure L1 lagrangienne pour suivre la qualité de borne
+                model.eval()
+                l1_vals = []
+                with torch.no_grad():
+                    for g in graphs_dev:
+                        l1_vals.append(lagrangian_v1ld(model(g), g).item()
+                                       / max(float(g.c_scale), 1.0))
+                model.train()
+                print(f"[warmup] ep {wm_ep:4d}/{args.n_warmup}  "
+                      f"mse={mse_sum/n_total:.6f}  "
+                      f"L1_norm={np.mean(l1_vals):.4f}  "
+                      f"t={time.perf_counter()-t_wm:.0f}s", flush=True)
+        print(f"[warmup] Terminé en {time.perf_counter()-t_wm:.0f}s\n", flush=True)
+
+    # ── 6. Boucle d'entraînement Lagrangienne ─────────────────────────────────
     t_start  = time.perf_counter()
     indices  = list(range(n_total))
 
@@ -278,46 +346,45 @@ def main() -> None:
         model.train()
         random.shuffle(indices)
 
-        epoch_loss   = 0.0
-        accum_count  = 0
-        accum_grads  = None   # liste de tenseurs clippés accumulés
+        epoch_loss  = 0.0
+        accum_count = 0
+        accum_grads = None  # buffer des gradients clippés par instance
 
         for step_i, gi in enumerate(indices):
             g       = graphs_dev[gi]
-            opt_val = max(abs(opt_vals[gi]), 1.0)
-
-            # Gradient isolé par instance : zero_grad avant chaque backward
             optimizer.zero_grad()
             lam  = model(g)
-            loss = lagrangian_v1ld(lam, g) / opt_val + args.alpha_l2 * (lam ** 2).mean()
+            loss = lagrangian_v1ld(lam, g) / max(float(g.c_scale), 1.0) + args.alpha_l2 * (lam ** 2).mean()
             loss.backward()
 
-            # Clip AVANT accumulation : borne max_norm par instance
-            torch.nn.utils.clip_grad_norm_(model.parameters(),
-                                           max_norm=args.max_norm)
+            # Clip par instance avant accumulation (max_norm=0 → désactivé)
+            if args.max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                               max_norm=args.max_norm)
 
-            # Accumuler les gradients clippés
+            # Accumulation manuelle des gradients clippés
             if accum_grads is None:
-                accum_grads = [p.grad.detach().clone() if p.grad is not None else None
-                               for p in model.parameters()]
+                accum_grads = [
+                    p.grad.detach().clone() if p.grad is not None else None
+                    for p in model.parameters()
+                ]
             else:
-                for j, p in enumerate(model.parameters()):
-                    if p.grad is not None and accum_grads[j] is not None:
-                        accum_grads[j] += p.grad.detach()
+                for buf, p in zip(accum_grads, model.parameters()):
+                    if buf is not None and p.grad is not None:
+                        buf.add_(p.grad.detach())
 
             epoch_loss  += loss.item()
             accum_count += 1
             is_last = (step_i == n_total - 1)
 
             if (step_i + 1) % args.batch_size == 0 or is_last:
-                # Appliquer la moyenne des gradients clippés
                 optimizer.zero_grad()
-                for p, acc in zip(model.parameters(), accum_grads):
-                    if acc is not None:
-                        p.grad = acc / accum_count
+                for buf, p in zip(accum_grads, model.parameters()):
+                    if buf is not None:
+                        p.grad = buf / accum_count
                 optimizer.step()
-                accum_grads = None
                 accum_count = 0
+                accum_grads = None
 
         scheduler.step()
         mean_loss = epoch_loss / n_total
@@ -339,7 +406,7 @@ def main() -> None:
 
     print(f"[diag] Entraînement terminé ({time.perf_counter() - t_start:.0f}s)")
 
-    # ── 6. Évaluation finale ──────────────────────────────────────────────────
+    # ── 7. Évaluation finale ──────────────────────────────────────────────────
     model.eval()
     final_l1       = []
     final_lam_mean = []
@@ -365,7 +432,7 @@ def main() -> None:
                 print(f"  [{j+1}/{len(sg_todo)}]  t={time.perf_counter()-t_sg:.0f}s",
                       flush=True)
 
-    # ── 6b. Trackers v10 ─────────────────────────────────────────────────────
+    # ── 7b. Trackers v10 ─────────────────────────────────────────────────────
     # T1 : |λ| moyen par item (rang 0 = item le plus cher grâce au tri par c_k).
     #      Corrélation négative rang–|λ| attendue si rescaling c_k/N est efficace.
     # T2 : std de λ_ik sur les scénarios pour chaque item k.
@@ -379,7 +446,7 @@ def main() -> None:
             final_lam_by_item.append(lam_2d.abs().mean(dim=0).cpu().numpy().tolist())
             final_lam_std_scen.append(lam_2d.std(dim=0).cpu().numpy().tolist())
 
-    # ── 7. Matrice cosine n_cosine × n_cosine ────────────────────────────────
+    # ── 8. Matrice cosine n_cosine × n_cosine ────────────────────────────────
     n_c = args.n_cosine
     n_per_cos = n_c // n_groups
 
@@ -396,7 +463,7 @@ def main() -> None:
     model.train()
     grad_vecs: list = []
     for j, gi in enumerate(cosine_idxs):
-        gv = gradient_vector(model, graphs_dev[gi], opt_vals[gi])
+        gv = gradient_vector(model, graphs_dev[gi], graphs_dev[gi].c_scale.item())
         grad_vecs.append(gv)
         if (j + 1) % 5 == 0:
             print(f"  [{j+1}/{n_c}]", flush=True)
@@ -427,7 +494,7 @@ def main() -> None:
             cos_depth_pairs.setdefault(key, []).append(float(cos_mat[i_idx, j_idx]))
     cos_depth_mean = {k: float(np.mean(v)) for k, v in sorted(cos_depth_pairs.items())}
 
-    # ── 8. Figures ────────────────────────────────────────────────────────────
+    # ── 9. Figures ────────────────────────────────────────────────────────────
     plt.rcParams.update({"font.size": 9})
 
     # 8a. Convergence L1 par instance
@@ -492,7 +559,7 @@ def main() -> None:
     fig.savefig(out_dir / "fig_cosine.png", dpi=150)
     plt.close(fig)
 
-    # 8d. Qualité GNN vs sous-gradient (instances calculées seulement)
+    # 9d. Qualité GNN vs sous-gradient (instances calculées seulement)
     sg_computed = [(gi, final_subgrad[gi]) for gi in range(n_total)
                    if final_subgrad[gi] is not None]
     if sg_computed:
@@ -515,7 +582,7 @@ def main() -> None:
         fig.savefig(out_dir / "fig_quality.png", dpi=150)
         plt.close(fig)
 
-    # ── 9. JSON ───────────────────────────────────────────────────────────────
+    # ── 10. JSON ──────────────────────────────────────────────────────────────
     metrics = {
         "config":               vars(args),
         "n_graphs":             n_total,
@@ -551,7 +618,7 @@ def main() -> None:
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
 
-    # ── 10. Résumé final ──────────────────────────────────────────────────────
+    # ── 11. Résumé final ──────────────────────────────────────────────────────
     print(f"\n[diag] ─── Résumé ───────────────────────────────────────")
     by_n_final: dict = defaultdict(list)
     for gi in range(n_total):

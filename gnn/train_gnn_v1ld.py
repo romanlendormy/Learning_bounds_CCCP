@@ -50,7 +50,8 @@ _pyg_data_mod = importlib.import_module("torch_geometric.data")
 pyg_data = _pyg_data_mod
 DataLoader = importlib.import_module("torch_geometric.loader").DataLoader
 from torch_geometric.nn import GatedGraphConv
-from torch_geometric.nn import global_mean_pool, global_max_pool
+from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
+from torch_geometric.utils import softmax as pyg_softmax
 
 # ── Solveur B&B C++ (optionnel, fallback Python si absent) ───────────────────
 import importlib.util as _ilu, pathlib as _pl
@@ -570,31 +571,33 @@ class GNN(nn.Module):
     """
     Prédit λ[i,k] ∈ R par nœud (scénario libre i, item actif k).
 
-    Architecture (v17 — 5m+3 node features, context 9-dim, max_pool optionnel) :
-      embed      : X(5m+5) → hidden → ReLU → hidden → ReLU → LayerNorm
+    Architecture (v20 — 7m+5 node features, context 9-dim, max_pool + theta_attn optionnels) :
+      embed      : X(7m+5) → hidden → ReLU → hidden → ReLU → LayerNorm
       conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
       conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
       proj       : hidden → 4h → ReLU → 2h                    → h_v
       pool scén  : nœud → scénario [mean] (+ [max] si use_max_pool) → h_scen_i
-      pool graph : scénario → graphe [mean uniforme]           → g_pool
-      norm_ctx   : LayerNorm sur les 6 features de contexte
+      pool graph : scénario → graphe [mean uniforme] ou [θ_i attentionnel] → g_pool (2h)
+      norm_ctx   : LayerNorm sur les 9 features de contexte
       head       : [h_v | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
 
     Paramètres :
-      m (int)           : nombre de contraintes (détermine NODE_DIM = 7m+5)
-      hidden            : dimension des couches cachées (défaut 64)
-      use_max_pool (bool) : si True, pool scén = [mean | max] (capte les scénarios
-                            les plus contraints, critiques pour la couverture)
+      m (int)             : nombre de contraintes (détermine NODE_DIM = 7m+5)
+      hidden              : dimension des couches cachées (défaut 64)
+      use_max_pool (bool) : si True, pool scén = [mean | max]
+      use_theta_attn (bool) : si True, g_pool = Σ_i attn(θ_i) · h_scen_i
+                              où θ_i est calculé depuis une passe préliminaire λ_pre
     """
     CONTEXT_DIM = 9  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(N_z), N_z/n_g]
 
     def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0,
-                 use_max_pool: bool = False):
+                 use_max_pool: bool = False, use_theta_attn: bool = False):
         super().__init__()
-        self.m            = m
-        self.hidden       = hidden
-        self.lam_max      = lam_max
-        self.use_max_pool = use_max_pool
+        self.m              = m
+        self.hidden         = hidden
+        self.lam_max        = lam_max
+        self.use_max_pool   = use_max_pool
+        self.use_theta_attn = use_theta_attn
         node_dim    = 7 * m + 5
 
         self.embed = nn.Sequential(
@@ -613,13 +616,17 @@ class GNN(nn.Module):
         self.norm_ctx = nn.LayerNorm(self.CONTEXT_DIM)
         # pool scén : 2h (mean seul) ou 4h (mean+max)
         scen_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
-        # h_v(2h) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(6)
+        # h_v(2h) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(9) — g_pool toujours 2h
         head_in = 2 * hidden + scen_pool_dim + 2 * hidden + self.CONTEXT_DIM
         self.head = nn.Sequential(
             nn.Linear(head_in, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),  nn.ReLU(),
             nn.Linear(hidden, 1),
         )
+        if use_theta_attn:
+            # Passe préliminaire : h_v → λ_pre → θ_i différentiable
+            self.lam_pre    = nn.Linear(2 * hidden, 1)
+            self.theta_temp = nn.Parameter(torch.ones(1))
 
     def forward(self, data: pyg_data.Data) -> torch.Tensor:
         x, ei, ew = data.x, data.edge_index, data.edge_weight
@@ -658,9 +665,44 @@ class GNN(nn.Module):
             h_scen = h_scen_mean                                   # (Σ N_z, 2h)
         h_scen_exp = h_scen[scen_batch]                            # (V, 2h or 4h)
 
-        # g_pool : résumé global de tous les nœuds (toujours 2h, indépendant de use_max_pool)
-        g_pool  = global_mean_pool(h_v, batch)                     # (B, 2h)
-        g_exp   = g_pool[batch]                                    # (V, 2h)
+        # g_pool : résumé global (mean uniforme ou attentionnel selon θ_i)
+        if self.use_theta_attn:
+            # Passe préliminaire : λ_pre → cost_pre → θ_i = Σ_k max(0, cost_ik)
+            c_scale_f = float(data.c_scale)
+            N_val     = float(data.N)
+            lam_pre   = self.lam_pre(h_v).squeeze(-1) * c_scale_f / N_val  # (V,)
+
+            # Λ_sum[i,k] = Σ_i lam_pre[i,k] — scatter par (graphe, item)
+            item_idx_global = batch * n_g + (local_idx % n_g)              # (V,)
+            Lambda_sum_gi   = global_add_pool(
+                lam_pre.unsqueeze(-1), item_idx_global).squeeze(-1)        # (B*n_g,)
+            Lambda_sum_v    = Lambda_sum_gi[item_idx_global]               # (V,)
+
+            # c_g par nœud — c_g est (n_g,) pour graph unique, (B*n_g,) si batché
+            n_c_g = data.c_g.shape[0]
+            if n_c_g == n_g:
+                c_g_v = data.c_g[local_idx % n_g]
+            else:
+                c_g_v = data.c_g[item_idx_global]
+
+            cost_pre   = c_g_v + lam_pre * N_val - Lambda_sum_v           # (V,)
+            theta_i    = global_add_pool(
+                torch.clamp(cost_pre, min=0).unsqueeze(-1),
+                scen_batch).squeeze(-1)                                    # (Σ N_z,)
+
+            # Softmax par graphe sur log1p(θ_i) pour stabilité numérique
+            scen_graph_batch = torch.repeat_interleave(
+                torch.arange(n_graphs, device=dev), n_scen_per)           # (Σ N_z,)
+            temp = self.theta_temp.abs().clamp(min=1e-3)
+            attn_w = pyg_softmax(
+                torch.log1p(theta_i) / temp, scen_graph_batch)            # (Σ N_z,)
+
+            g_pool = global_add_pool(
+                h_scen_mean * attn_w.unsqueeze(-1),
+                scen_graph_batch)                                          # (B, 2h)
+        else:
+            g_pool  = global_mean_pool(h_v, batch)                        # (B, 2h)
+        g_exp   = g_pool[batch]                                            # (V, 2h)
 
         ctx = data.context
         if ctx.dim() == 1:

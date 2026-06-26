@@ -20,7 +20,7 @@
 #SBATCH --job-name=diag_overfit100
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=4:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output=logs/slurm_%x_%j.out
 #SBATCH --error=logs/slurm_%x_%j.err
 
@@ -47,6 +47,8 @@ WARMUP_LR="${WARMUP_LR:-1e-3}"
 WARMUP_T="${WARMUP_T:-50}"
 # Max pooling sur les scénarios : 1 = activé (recommandé), 0 = désactivé (v15)
 USE_MAX_POOL="${USE_MAX_POOL:-1}"
+# Attention θ_i pour le pool global (v20) : 1 = activé, 0 = désactivé
+USE_THETA_ATTN="${USE_THETA_ATTN:-0}"
 # Dimension cachée du GNN
 HIDDEN="${HIDDEN:-64}"
 
@@ -63,7 +65,7 @@ echo "  Diagnostic overfit 100 — $(date)"
 echo "  Job : ${SLURM_JOB_ID:-local}   Nœud : $(hostname)"
 echo "  N_EPOCHS=$N_EPOCHS  EVAL_EVERY=$EVAL_EVERY  BATCH_SIZE=$BATCH_SIZE"
 echo "  LR=$LR  N_GRAPHS=$N_GRAPHS  MAX_DEPTH=$MAX_DEPTH  N_SCENS=$N_SCENS  MAX_NORM=$MAX_NORM"
-echo "  N_WARMUP=$N_WARMUP  WARMUP_LR=$WARMUP_LR  WARMUP_T=$WARMUP_T  USE_MAX_POOL=$USE_MAX_POOL"
+echo "  N_WARMUP=$N_WARMUP  WARMUP_LR=$WARMUP_LR  WARMUP_T=$WARMUP_T  USE_MAX_POOL=$USE_MAX_POOL  USE_THETA_ATTN=$USE_THETA_ATTN"
 echo "  CPUs alloués : ${SLURM_CPUS_PER_TASK:-?}  (OMP_NUM_THREADS idem)"
 echo "  OUT_DIR : $OUT_DIR"
 echo "======================================================================"
@@ -114,6 +116,9 @@ SUBGRAD_FLAG=""
 MAX_POOL_FLAG=""
 [ "${USE_MAX_POOL:-1}" = "1" ] && MAX_POOL_FLAG="--use_max_pool"
 
+THETA_ATTN_FLAG=""
+[ "${USE_THETA_ATTN:-0}" = "1" ] && THETA_ATTN_FLAG="--use_theta_attn"
+
 python "$REPO/gnn/diag_overfit_100.py" \
     --data_dir   "$DATA_LOCAL"  \
     --out_dir    "$OUT_DIR"     \
@@ -133,7 +138,8 @@ python "$REPO/gnn/diag_overfit_100.py" \
     --hidden     "$HIDDEN"      \
     --device     cpu            \
     $SUBGRAD_FLAG               \
-    $MAX_POOL_FLAG
+    $MAX_POOL_FLAG              \
+    $THETA_ATTN_FLAG
 
 echo ""
 echo "======================================================================"

@@ -1,0 +1,4 @@
+torch>=2.0
+torch-geometric>=2.4
+matplotlib>=3.7
+numpy>=1.24
