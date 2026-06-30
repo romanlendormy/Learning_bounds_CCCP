@@ -37,6 +37,11 @@ pybind11_add_module(gecode_cpp gecode_bindings.cpp)
 target_link_libraries(gecode_cpp PRIVATE gecode_solver_core)
 target_compile_options(gecode_cpp PRIVATE -O3 -march=native)
 
+# ── Runner de tests SSP ───────────────────────────────────────────────────────
+add_executable(test_ssp test_ssp.cpp)
+target_link_libraries(test_ssp PRIVATE gecode_solver_core)
+target_compile_options(test_ssp PRIVATE -O2)
+
 # ── Copie du .so dans la racine du projet ─────────────────────────────────────
 add_custom_command(TARGET gecode_cpp POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory

@@ -3,9 +3,15 @@
  *
  * Expose :
  *   MKPProblem(c, p, A, b, epsilon)
- *   SSPProblem(profit, p, epsilon, delta, accepting)
- *     delta     : (N, k, Q, m) int32
- *     accepting : (N, k, Q)    uint8  (0/1)
+ *   SSPShiftProblem(transitions, accepting, initial, salary, demand, p, epsilon, E)
+ *     transitions : (n_trans, 3) int32  — (src, sym_int, dst), sym_int∈{0=O,1=P,2=R,3=W}
+ *     accepting   : (n_acc,)    int32   — états acceptants
+ *     initial     : int                 — état initial
+ *     salary      : (T,)        float64 — coûts salariaux
+ *     demand      : (N, T)      int32   — demande[scénario][période]
+ *     p           : (N,)        float64 — probabilités
+ *     epsilon     : float
+ *     E           : int                 — nombre d'employés
  *   solve_v1ld(problem, T, log_interval, verbose, time_limit_s,
  *              rel_tol, tol_window, v_lower, lambda_init)
  *
@@ -101,64 +107,77 @@ Args:
         py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
         py::arg("epsilon"));
 
-    // ── SSPProblem ────────────────────────────────────────────────────────────
-    py::class_<SSPProblem, V1LDProblem>(m, "SSPProblem",
+    // ── SSPShiftProblem ───────────────────────────────────────────────────────
+    py::class_<SSPShiftProblem, V1LDProblem>(m, "SSPShiftProblem",
         R"doc(
-Problème v1LD pour le CCSSP à contraintes automates.
+Problème v1LD pour le SSP shift scheduling multi-employés.
+
+E employés partagent un DFA unique de quarts légaux.
+Scénarios de demande d[t,k] : couverture requise à la période t.
+Objectif : min Σ_e Σ_t salary[t] · 1[x[e,t]=W]  (max −salary en interne).
+
+solve_theta : E DPs indépendants sur le DFA déroulé.  O(E·T·Q·4).
+solve_zeta  : CP-SAT exact (AddAutomaton × E + couverture). NP-hard exact.
 
 Args:
-    profit    : (n, m)      matrice de profits déterministe (row=période, col=activité)
-    p         : (N,)        probabilités des scénarios
-    epsilon   : niveau de risque ε
-    delta     : (N, k, Q, m) int32 — tables de transition (-1 = transition morte)
-    accepting : (N, k, Q)   uint8  — états acceptants (0/1)
+    transitions : (n_trans, 3) int32  — [(src, sym_int, dst)]
+                  sym_int ∈ {0=O, 1=P, 2=R, 3=W}
+    accepting   : (n_acc,)    int32   — états acceptants
+    initial     : int                 — état initial
+    salary      : (T,)        float64 — coûts salariaux (positifs)
+    demand      : (N, T)      int32   — demand[scénario][période]
+    p           : (N,)        float64 — probabilités (Σ=1)
+    epsilon     : float               — niveau de risque
+    E           : int                 — nombre d'employés
 )doc")
         .def(py::init([](
-            py::array_t<double>  profit_arr,
+            py::array_t<int32_t> trans_arr,
+            py::array_t<int32_t> acc_arr,
+            int                  initial,
+            py::array_t<double>  salary_arr,
+            py::array_t<int32_t> demand_arr,
             py::array_t<double>  p_arr,
             double               epsilon,
-            py::array_t<int32_t> delta_arr,
-            py::array_t<uint8_t> acc_arr)
+            int                  E)
         {
-            auto profit_buf = profit_arr.unchecked<2>();
-            auto p_buf      = p_arr.unchecked<1>();
-            auto delta_buf  = delta_arr.unchecked<4>();
-            auto acc_buf    = acc_arr.unchecked<3>();
+            // transitions : (n_trans, 3) — (src, sym, dst)
+            auto tb = trans_arr.unchecked<2>();
+            int  nt = (int)tb.shape(0);
+            std::vector<std::tuple<int,int,int>> transitions(nt);
+            for (int i = 0; i < nt; ++i)
+                transitions[i] = {tb(i,0), tb(i,1), tb(i,2)};
 
-            int n = (int)profit_buf.shape(0);
-            int mv = (int)profit_buf.shape(1);
-            int N = (int)p_buf.shape(0);
-            int k = (int)delta_buf.shape(1);
-            int Q = (int)delta_buf.shape(2);
+            // accepting : (n_acc,)
+            auto ab = acc_arr.unchecked<1>();
+            std::vector<int> accepting((int)ab.shape(0));
+            for (int i = 0; i < (int)accepting.size(); ++i)
+                accepting[i] = ab(i);
 
-            Vec1d profit(n * mv);
-            for (int t = 0; t < n; ++t)
-                for (int a = 0; a < mv; ++a)
-                    profit[t * mv + a] = profit_buf(t, a);
+            // salary : (T,)
+            auto sb = salary_arr.unchecked<1>();
+            int T = (int)sb.shape(0);
+            Vec1d salary(T);
+            for (int t = 0; t < T; ++t) salary[t] = sb(t);
 
+            // demand : (N, T)
+            auto db = demand_arr.unchecked<2>();
+            int N = (int)db.shape(0);
+            Vec2i demand(N, Vec1i(T));
+            for (int i = 0; i < N; ++i)
+                for (int t = 0; t < T; ++t)
+                    demand[i][t] = db(i, t);
+
+            // p : (N,)
+            auto pb = p_arr.unchecked<1>();
             Vec1d p(N);
-            for (int i = 0; i < N; ++i) p[i] = p_buf(i);
+            for (int i = 0; i < N; ++i) p[i] = pb(i);
 
-            std::vector<SSPScenario> scenarios(N);
-            for (int i = 0; i < N; ++i) {
-                scenarios[i].automata.resize(k);
-                for (int j = 0; j < k; ++j) {
-                    scenarios[i].automata[j].delta.assign(Q, Vec1i(mv));
-                    scenarios[i].automata[j].accepting.resize(Q);
-                    for (int q = 0; q < Q; ++q) {
-                        scenarios[i].automata[j].accepting[q] = (acc_buf(i,j,q) != 0);
-                        for (int a = 0; a < mv; ++a)
-                            scenarios[i].automata[j].delta[q][a] = delta_buf(i,j,q,a);
-                    }
-                }
-            }
-
-            return new SSPProblem(n, mv, k, Q,
-                                  std::move(profit), std::move(p), epsilon,
-                                  std::move(scenarios));
+            return new SSPShiftProblem(transitions, accepting, initial,
+                                       salary, demand, std::move(p), epsilon, E);
         }),
-        py::arg("profit"), py::arg("p"), py::arg("epsilon"),
-        py::arg("delta"), py::arg("accepting"));
+        py::arg("transitions"), py::arg("accepting"), py::arg("initial"),
+        py::arg("salary"), py::arg("demand"), py::arg("p"),
+        py::arg("epsilon"), py::arg("E"));
 
     // ── MKPProblemBnB (variante B&B pour benchmark) ───────────────────────────
     py::class_<MKPProblemBnB, MKPProblem>(m, "MKPProblemBnB",
@@ -293,66 +312,9 @@ Args:
         "Solveur v1CLD générique. Retourne v1CLD_star, convergence, times_s, "
         "gnorm_history, z_changes, solve_time_s, iterations_run, lambda_star.");
 
-    // ── SSPCLDProblem ─────────────────────────────────────────────────────────
-    py::class_<SSPCLDProblem, V1CLDProblem>(m, "SSPCLDProblem",
-        R"doc(
-Problème v1CLD pour le CCSSP à contraintes automates (décomposition par automate).
-
-n_constraints() = k — un sous-problème ζ_{i,j} par automate j du scénario i.
-
-Args:
-    profit    : (n, m)       matrice de profits déterministe
-    p         : (N,)         probabilités des scénarios
-    epsilon   : niveau de risque ε
-    delta     : (N, k, Q, m) int32 — tables de transition (-1 = mort)
-    accepting : (N, k, Q)    uint8  — états acceptants (0/1)
-)doc")
-        .def(py::init([](
-            py::array_t<double>  profit_arr,
-            py::array_t<double>  p_arr,
-            double               epsilon,
-            py::array_t<int32_t> delta_arr,
-            py::array_t<uint8_t> acc_arr)
-        {
-            auto profit_buf = profit_arr.unchecked<2>();
-            auto p_buf      = p_arr.unchecked<1>();
-            auto delta_buf  = delta_arr.unchecked<4>();
-            auto acc_buf    = acc_arr.unchecked<3>();
-
-            int n  = (int)profit_buf.shape(0);
-            int mv = (int)profit_buf.shape(1);
-            int N  = (int)p_buf.shape(0);
-            int k  = (int)delta_buf.shape(1);
-            int Q  = (int)delta_buf.shape(2);
-
-            Vec1d profit(n * mv);
-            for (int t = 0; t < n; ++t)
-                for (int a = 0; a < mv; ++a)
-                    profit[t * mv + a] = profit_buf(t, a);
-
-            Vec1d p(N);
-            for (int i = 0; i < N; ++i) p[i] = p_buf(i);
-
-            std::vector<SSPScenario> scenarios(N);
-            for (int i = 0; i < N; ++i) {
-                scenarios[i].automata.resize(k);
-                for (int j = 0; j < k; ++j) {
-                    scenarios[i].automata[j].delta.assign(Q, Vec1i(mv));
-                    scenarios[i].automata[j].accepting.resize(Q);
-                    for (int q = 0; q < Q; ++q) {
-                        scenarios[i].automata[j].accepting[q] = (acc_buf(i,j,q) != 0);
-                        for (int a = 0; a < mv; ++a)
-                            scenarios[i].automata[j].delta[q][a] = delta_buf(i,j,q,a);
-                    }
-                }
-            }
-
-            return new SSPCLDProblem(n, mv, k, Q,
-                                     std::move(profit), std::move(p), epsilon,
-                                     std::move(scenarios));
-        }),
-        py::arg("profit"), py::arg("p"), py::arg("epsilon"),
-        py::arg("delta"), py::arg("accepting"));
+    // ── SSPCLDProblem : TODO (v1CLD hors-scope) ──────────────────────────────
+    // La décomposition v1CLD pour le SSP n'est pas encore implémentée.
+    // Voir ssp/ssp_cld_problem.hpp pour les TODO.
 
     // ── solve_v1ld ────────────────────────────────────────────────────────────
     m.def("solve_v1ld",

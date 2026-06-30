@@ -44,22 +44,37 @@ GecodeResult solve_gecode_mkp(
     double time_lim = 300.0);
 
 /*
- * solve_gecode_ssp
- *   n        : nombre de périodes
- *   m        : nombre d'activités par période
- *   k        : nombre d'automates par scénario
- *   Q        : nombre d'états par automate
- *   N        : nombre de scénarios
- *   epsilon  : niveau de risque
- *   profit   : (n*m,)        matrice de profits aplatie (profit[t*m+a])
- *   p        : (N,)          probabilités
- *   delta    : [N][k][Q][m]  tables de transition (-1 = transition morte)
- *   accepting: [N][k][Q]     états acceptants (1=oui, 0=non)
- *   time_lim : limite de temps en secondes (-1 = sans limite)
+ * solve_gecode_ssp — SSP couverture multi-employés (chance-constraint joint)
+ *
+ *   E              : nombre d'employés
+ *   T              : nombre de périodes
+ *   m              : taille de l'alphabet Σ
+ *   Q              : nombre d'états du DFA (partagé par tous les employés)
+ *   N              : nombre de scénarios
+ *   epsilon        : niveau de risque
+ *   work_indicator : (m,)    1 si le symbole est "travail", 0 sinon
+ *   salary         : (T,)    coût salarial par période (double, scalé en interne)
+ *   delta          : [Q][m]  table de transition (-1 = transition morte)
+ *   q0             : état initial du DFA
+ *   accepting      : liste des états acceptants (état final légal)
+ *   demand         : [N][T]  demande stochastique — ordre : scénario i, période t
+ *   time_lim       : limite de temps en secondes (-1 = sans limite)
+ *   break_symmetry : brisure de symétrie lex sur les lignes (défaut : true)
  */
 GecodeResult solve_gecode_ssp(
-    int n, int m, int k, int Q, int N, double epsilon,
-    const Vec1d& profit, const Vec1d& p,
-    const std::vector<std::vector<std::vector<std::vector<int>>>>& delta,
-    const std::vector<std::vector<std::vector<int>>>& accepting,
-    double time_lim = 300.0);
+    int E, int T, int m, int Q, int N, double epsilon,
+    const std::vector<int>& work_indicator,
+    const Vec1d&            salary,
+    const std::vector<std::vector<int>>& delta,    // [Q][m]
+    int                     q0,
+    const std::vector<int>& accepting,
+    const std::vector<std::vector<int>>& demand,   // [N][T]
+    double time_lim       = 300.0,
+    bool   break_symmetry = true);
+
+/*
+ * run_ssp_tests — Vérifie les propriétés de solve_gecode_ssp sur une instance
+ *                 jouet (E=3, T=8, m=4, Q=3, N=20, ε=0.10).
+ * Retourne true si tous les tests passent.
+ */
+bool run_ssp_tests();

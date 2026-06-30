@@ -51,7 +51,8 @@ V1LDResult solve_v1ld(
     V1LDProblem& problem,
     int T, int log_interval, bool verbose,
     double time_limit_s, double rel_tol, int tol_window,
-    double v_lower, const Vec2d& lambda_init)
+    double v_lower, const Vec2d& lambda_init,
+    double abs_tol, int abs_patience)
 {
     int         d   = problem.n_vars();
     int         N   = problem.N_scen();
@@ -69,6 +70,10 @@ V1LDResult solve_v1ld(
     times_vec.reserve(convergence.capacity());
     gnorm_vec.reserve(convergence.capacity());
     zchanges_vec.reserve(convergence.capacity());
+
+    // État pour abs_tol / abs_patience
+    double best_at_patience_start = +1e18;
+    int    stale_iters             = 0;
 
     Vec1d prev_y(N, 0.0);
     auto  t0 = std::chrono::high_resolution_clock::now();
@@ -155,6 +160,16 @@ V1LDResult solve_v1ld(
             double impr = best_at_tol_check - best_upper;
             if (impr / std::max(std::abs(best_upper), 1e-10) < rel_tol) break;
             best_at_tol_check = best_upper;
+        }
+        // Critère patience absolu : arrêt si best_upper ne s'améliore pas de abs_tol
+        // pendant abs_patience itérations consécutives.
+        if (abs_tol > 0.0 && abs_patience > 0) {
+            if (best_at_patience_start - best_upper >= abs_tol) {
+                best_at_patience_start = best_upper;
+                stale_iters            = 0;
+            } else if (++stale_iters >= abs_patience) {
+                break;
+            }
         }
 
         // ── (H) Pas de descente + mise à jour λ ─────────────────────────────

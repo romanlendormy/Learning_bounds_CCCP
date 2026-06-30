@@ -3,14 +3,18 @@
  *
  * Expose :
  *   solve_mkp(c, p, A, b, epsilon, time_limit=300.0)  → dict
- *   solve_ssp(profit, p, epsilon, delta, accepting, time_limit=300.0) → dict
+ *   solve_ssp(E, T, m, Q, N, epsilon,
+ *             work_indicator, salary, delta, q0, accepting, demand,
+ *             time_limit=300.0, break_symmetry=True)   → dict
+ *   run_ssp_tests()                                    → bool
  *
  * Utilisation Python :
  *   import gecode_cpp as gc
  *   res = gc.solve_mkp(c, p, A, b, epsilon=0.1, time_limit=120.0)
  *   print(res["objective"], res["status"])
  *
- *   res = gc.solve_ssp(profit, p, epsilon, delta, accepting, time_limit=300.0)
+ *   res = gc.solve_ssp(E, T, m, Q, N, 0.1,
+ *                      work_indicator, salary, delta, q0, accepting, demand)
  */
 
 #include "gecode_solver.hpp"
@@ -52,49 +56,42 @@ static Vec3d to_vec3d(py::array_t<double> arr) {
     return v;
 }
 
-// delta : (N, k, Q, m) int32
-static std::vector<std::vector<std::vector<std::vector<int>>>>
-to_delta(py::array_t<int32_t> arr) {
-    auto buf = arr.unchecked<4>();
-    int N = buf.shape(0), k = buf.shape(1), Q = buf.shape(2), m = buf.shape(3);
-    std::vector<std::vector<std::vector<std::vector<int>>>> d(
-        N, std::vector<std::vector<std::vector<int>>>(
-            k, std::vector<std::vector<int>>(
-                Q, std::vector<int>(m))));
-    for (int i = 0; i < N; ++i)
-        for (int j = 0; j < k; ++j)
-            for (int q = 0; q < Q; ++q)
-                for (int a = 0; a < m; ++a)
-                    d[i][j][q][a] = buf(i, j, q, a);
+// delta SSP : (Q, m) int32 — table de transition
+static std::vector<std::vector<int>> to_delta2d(py::array_t<int32_t> arr) {
+    auto buf = arr.unchecked<2>();
+    int Q = buf.shape(0), m = buf.shape(1);
+    std::vector<std::vector<int>> d(Q, std::vector<int>(m));
+    for (int q = 0; q < Q; ++q)
+        for (int a = 0; a < m; ++a)
+            d[q][a] = buf(q, a);
     return d;
 }
 
-// accepting : (N, k, Q) uint8
-static std::vector<std::vector<std::vector<int>>>
-to_accepting(py::array_t<uint8_t> arr) {
-    auto buf = arr.unchecked<3>();
-    int N = buf.shape(0), k = buf.shape(1), Q = buf.shape(2);
-    std::vector<std::vector<std::vector<int>>> ac(
-        N, std::vector<std::vector<int>>(k, std::vector<int>(Q)));
+// demand SSP : (N, T) int32
+static std::vector<std::vector<int>> to_demand(py::array_t<int32_t> arr) {
+    auto buf = arr.unchecked<2>();
+    int N = buf.shape(0), T = buf.shape(1);
+    std::vector<std::vector<int>> d(N, std::vector<int>(T));
     for (int i = 0; i < N; ++i)
-        for (int j = 0; j < k; ++j)
-            for (int q = 0; q < Q; ++q)
-                ac[i][j][q] = (buf(i, j, q) != 0) ? 1 : 0;
-    return ac;
+        for (int t = 0; t < T; ++t)
+            d[i][t] = buf(i, t);
+    return d;
 }
 
 // ── Convertir GecodeResult → py::dict ─────────────────────────────────────────
 
 static py::dict to_dict(const GecodeResult& r) {
     py::dict d;
-    d["objective"]          = r.objective;
-    d["optimal"]            = r.optimal;
-    d["feasible"]           = r.feasible;
-    d["solve_time_s"]       = r.solve_time_s;
-    d["cold_start_time_s"]  = r.cold_start_time_s;
-    d["status"]             = r.status;
-    d["nodes"]              = r.nodes;
-    d["fails"]              = r.fails;
+    d["objective"]               = r.objective;
+    d["optimal"]                 = r.optimal;
+    d["feasible"]                = r.feasible;
+    d["solve_time_s"]            = r.solve_time_s;
+    d["cold_start_time_s"]       = r.cold_start_time_s;
+    d["status"]                  = r.status;
+    d["nodes"]                   = r.nodes;
+    d["fails"]                   = r.fails;
+    d["depth"]                   = r.depth;
+    d["incumbent_improvements"]  = r.incumbent_improvements;
     return d;
 }
 
@@ -147,50 +144,78 @@ Retourne un dict :
 )doc");
 
     m.def("solve_ssp",
-        [](py::array_t<double>  profit_arr,
-           py::array_t<double>  p_arr,
+        [](int                  E,
+           int                  T,
+           int                  m,
+           int                  Q,
+           int                  N,
            double               epsilon,
+           py::array_t<int32_t> work_indicator_arr,
+           py::array_t<double>  salary_arr,
            py::array_t<int32_t> delta_arr,
-           py::array_t<uint8_t> acc_arr,
-           double               time_limit) -> py::dict
+           int                  q0,
+           std::vector<int>     accepting,
+           py::array_t<int32_t> demand_arr,
+           double               time_limit,
+           bool                 break_symmetry) -> py::dict
         {
-            auto prof_buf  = profit_arr.unchecked<2>();
-            auto p_buf     = p_arr.unchecked<1>();
-            auto delta_buf = delta_arr.unchecked<4>();
+            auto wi_buf = work_indicator_arr.unchecked<1>();
+            if (wi_buf.shape(0) != m)
+                throw std::invalid_argument("solve_ssp: work_indicator size != m");
+            std::vector<int> work_indicator(m);
+            for (int a = 0; a < m; ++a) work_indicator[a] = wi_buf(a);
 
-            int n = prof_buf.shape(0), mv = prof_buf.shape(1);
-            int N = p_buf.shape(0);
-            int k = delta_buf.shape(1), Q = delta_buf.shape(2), m2 = delta_buf.shape(3);
-            if (mv != m2)
-                throw std::invalid_argument("solve_ssp: profit.shape[1] != delta.shape[3]");
+            auto sal_buf = salary_arr.unchecked<1>();
+            if (sal_buf.shape(0) != T)
+                throw std::invalid_argument("solve_ssp: salary size != T");
+            Vec1d salary(T);
+            for (int t = 0; t < T; ++t) salary[t] = sal_buf(t);
 
-            // profit aplati (n*m,)
-            Vec1d profit_flat(n * mv);
-            for (int t = 0; t < n; ++t)
-                for (int a = 0; a < mv; ++a)
-                    profit_flat[t * mv + a] = prof_buf(t, a);
+            auto delta_buf = delta_arr.unchecked<2>();
+            if (delta_buf.shape(0) != Q || delta_buf.shape(1) != m)
+                throw std::invalid_argument("solve_ssp: delta shape != (Q, m)");
+
+            auto dem_buf = demand_arr.unchecked<2>();
+            if (dem_buf.shape(0) != N || dem_buf.shape(1) != T)
+                throw std::invalid_argument("solve_ssp: demand shape != (N, T)");
 
             return to_dict(solve_gecode_ssp(
-                n, mv, k, Q, N, epsilon,
-                profit_flat, to_vec1d(p_arr),
-                to_delta(delta_arr), to_accepting(acc_arr),
-                time_limit));
+                E, T, m, Q, N, epsilon,
+                work_indicator, salary,
+                to_delta2d(delta_arr), q0, accepting,
+                to_demand(demand_arr),
+                time_limit, break_symmetry));
         },
-        py::arg("profit"), py::arg("p"), py::arg("epsilon"),
-        py::arg("delta"), py::arg("accepting"),
-        py::arg("time_limit") = 300.0,
+        py::arg("E"), py::arg("T"), py::arg("m"), py::arg("Q"), py::arg("N"),
+        py::arg("epsilon"),
+        py::arg("work_indicator"), py::arg("salary"),
+        py::arg("delta"), py::arg("q0"), py::arg("accepting"), py::arg("demand"),
+        py::arg("time_limit")      = 300.0,
+        py::arg("break_symmetry")  = true,
         R"doc(
-Résout le CCSSP chance-contraint en one-shot via Gecode (B&B, automate produit).
+Résout le CCSSP couverture multi-employés en one-shot via Gecode (B&B, BAB).
 
 Args:
-    profit    : (n, m)       matrice de profits (float64)
-    p         : (N,)         probabilités des scénarios (float64)
-    epsilon   : niveau de risque
-    delta     : (N, k, Q, m) int32 — tables de transition (-1 = mort)
-    accepting : (N, k, Q)    uint8 — états acceptants
-    time_limit: limite de temps en secondes (défaut 300s)
+    E              : nombre d'employés
+    T              : nombre de périodes
+    m              : taille de l'alphabet
+    Q              : nombre d'états du DFA
+    N              : nombre de scénarios
+    epsilon        : niveau de risque (chance constraint)
+    work_indicator : (m,) int32 — 1 si le symbole est "travail", 0 sinon
+    salary         : (T,) float64 — coût salarial par période
+    delta          : (Q, m) int32 — table de transition (-1 = morte)
+    q0             : état initial du DFA
+    accepting      : list[int] — états acceptants
+    demand         : (N, T) int32 — demande[scénario][période]
+    time_limit     : limite de temps en secondes (défaut 300s)
+    break_symmetry : brisure lex sur les lignes employés (défaut True)
 
 Retourne un dict :
-    objective, feasible, optimal, solve_time_s, status
+    objective, feasible, optimal, solve_time_s, cold_start_time_s,
+    status, nodes, fails, depth, incumbent_improvements
 )doc");
+
+    m.def("run_ssp_tests", &run_ssp_tests,
+        "Exécute les tests de régression SSP (E=3,T=8,N=20,ε=0.1). Retourne True si tous OK.");
 }

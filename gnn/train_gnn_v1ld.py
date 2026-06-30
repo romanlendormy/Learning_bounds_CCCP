@@ -571,14 +571,15 @@ class GNN(nn.Module):
     """
     Prédit λ[i,k] ∈ R par nœud (scénario libre i, item actif k).
 
-    Architecture (v20 — 7m+5 node features, context 9-dim, max_pool + theta_attn optionnels) :
+    Architecture (v21 — 7m+5 node features, context 9-dim, FiLM + max_pool + theta_attn optionnels) :
       embed      : X(7m+5) → hidden → ReLU → hidden → ReLU → LayerNorm
+      [FiLM]     : γ(ctx)⊙h + β(ctx)  — si use_film ; init identité (γ=1, β=0)
       conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
       conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
       proj       : hidden → 4h → ReLU → 2h                    → h_v
       pool scén  : nœud → scénario [mean] (+ [max] si use_max_pool) → h_scen_i
       pool graph : scénario → graphe [mean uniforme] ou [θ_i attentionnel] → g_pool (2h)
-      norm_ctx   : LayerNorm sur les 9 features de contexte
+      norm_ctx   : LayerNorm sur les 9 features de contexte (calculé une seule fois)
       head       : [h_v | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
 
     Paramètres :
@@ -587,17 +588,21 @@ class GNN(nn.Module):
       use_max_pool (bool) : si True, pool scén = [mean | max]
       use_theta_attn (bool) : si True, g_pool = Σ_i attn(θ_i) · h_scen_i
                               où θ_i est calculé depuis une passe préliminaire λ_pre
+      use_film (bool)     : si True, FiLM conditioning après l'embed
+                            (le contexte module le message-passing dès le début)
     """
     CONTEXT_DIM = 9  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(N_z), N_z/n_g]
 
     def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0,
-                 use_max_pool: bool = False, use_theta_attn: bool = False):
+                 use_max_pool: bool = False, use_theta_attn: bool = False,
+                 use_film: bool = False):
         super().__init__()
         self.m              = m
         self.hidden         = hidden
         self.lam_max        = lam_max
         self.use_max_pool   = use_max_pool
         self.use_theta_attn = use_theta_attn
+        self.use_film       = use_film
         node_dim    = 7 * m + 5
 
         self.embed = nn.Sequential(
@@ -627,6 +632,13 @@ class GNN(nn.Module):
             # Passe préliminaire : h_v → λ_pre → θ_i différentiable
             self.lam_pre    = nn.Linear(2 * hidden, 1)
             self.theta_temp = nn.Parameter(torch.ones(1))
+        if use_film:
+            # FiLM : ctx (9) → (γ, β) de dim hidden chacun
+            # Init identité : γ=1, β=0 → comportement sans FiLM au départ
+            self.film = nn.Linear(self.CONTEXT_DIM, 2 * hidden)
+            nn.init.zeros_(self.film.weight)
+            self.film.bias.data[:hidden] = 1.0   # γ = 1
+            self.film.bias.data[hidden:] = 0.0   # β = 0
 
     def forward(self, data: pyg_data.Data) -> torch.Tensor:
         x, ei, ew = data.x, data.edge_index, data.edge_weight
@@ -637,8 +649,19 @@ class GNN(nn.Module):
         dev      = x.device
         n_graphs = int(batch.max().item()) + 1
 
+        # ── Contexte normalisé (une seule fois — réutilisé par FiLM et la tête) ─
+        ctx = data.context
+        if ctx.dim() == 1:
+            ctx = ctx.unsqueeze(0)
+        ctx_norm = self.norm_ctx(ctx)                                  # (1 or B, 9)
+
         # ── Message passing ───────────────────────────────────────────────────
-        h   = self.norm_embed(self.embed(x))
+        h = self.norm_embed(self.embed(x))
+        if self.use_film:
+            film_out = self.film(ctx_norm)                             # (1 or B, 2h)
+            gamma    = film_out[..., :self.hidden]                     # (1 or B, h)
+            beta     = film_out[..., self.hidden:]                     # (1 or B, h)
+            h        = gamma[batch] * h + beta[batch]                  # (V, h)
         h1  = self.norm1(self.conv1(h,  ei, ew))
         h2  = self.norm2(self.conv2(h1, ei, ew)) + h1
         h_v = self.proj(h2)                                        # (V, 2h)
@@ -704,15 +727,12 @@ class GNN(nn.Module):
             g_pool  = global_mean_pool(h_v, batch)                        # (B, 2h)
         g_exp   = g_pool[batch]                                            # (V, 2h)
 
-        ctx = data.context
-        if ctx.dim() == 1:
-            ctx = ctx.unsqueeze(0)
-        ctx_exp = self.norm_ctx(ctx)[batch]                        # (V, ctx_dim)
+        ctx_exp = ctx_norm[batch]                                          # (V, 9)
 
         cat     = torch.cat([h_v, h_scen_exp, g_exp, ctx_exp], dim=-1)
         h_out   = self.head(cat).squeeze(-1)
-        lam_raw = self.lam_max * torch.tanh(h_out) if self.lam_max > 0 else h_out
-        lam     = lam_raw * data.c_scale / float(data.N)
+        lam_unscaled = h_out * data.c_scale / float(data.N)
+        lam = self.lam_max * torch.tanh(lam_unscaled / self.lam_max) if self.lam_max > 0 else lam_unscaled
         return lam
 
 

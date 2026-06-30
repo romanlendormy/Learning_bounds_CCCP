@@ -41,6 +41,7 @@ add_library(v1ld_generic_core STATIC
     mkp/mkp_cld_problem_dp.cpp
     ssp/ssp_problem.cpp
     ssp/ssp_cld_problem.cpp
+    ssp/ssp_loader.cpp
     covset/covset_problem.cpp
     covset/covset_cld_problem.cpp
 )
@@ -50,8 +51,32 @@ target_include_directories(v1ld_generic_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ssp
     ${CMAKE_CURRENT_SOURCE_DIR}/covset
 )
+
+# ── Exécutables de test et benchmark SSP ─────────────────────────────────────
+add_executable(test_ssp_shift ssp/test_ssp.cpp)
+target_link_libraries(test_ssp_shift PRIVATE v1ld_generic_core)
+target_compile_options(test_ssp_shift PRIVATE -O2)
+
+add_executable(bench_ssp tests/bench_ssp.cpp)
+target_link_libraries(bench_ssp PRIVATE v1ld_generic_core)
+target_compile_options(bench_ssp PRIVATE -O3 -march=native)
 target_compile_options(v1ld_generic_core PRIVATE -O3 -march=native)
 target_link_libraries(v1ld_generic_core PUBLIC ortools::ortools)
+
+# ── Gecode (pour bench_ssp : optimal exact via BAB sans borne) ────────────────
+set(GECODE_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/../external/gecode"
+    CACHE PATH "Répertoire d'installation Gecode")
+add_library(gecode_solver_core STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../gecode_base/gecode_solver.cpp)
+target_include_directories(gecode_solver_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../gecode_base
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${GECODE_PREFIX}/include)
+target_compile_options(gecode_solver_core PRIVATE -O2)
+target_link_libraries(gecode_solver_core PUBLIC
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel)
+target_link_libraries(bench_ssp PRIVATE gecode_solver_core)
 
 # ── Module Python v1LD générique (uniquement si pybind11 est disponible) ──────
 if(pybind11_FOUND)
