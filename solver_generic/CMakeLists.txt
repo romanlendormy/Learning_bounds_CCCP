@@ -41,6 +41,7 @@ add_library(v1ld_generic_core STATIC
     mkp/mkp_cld_problem_dp.cpp
     ssp/ssp_problem.cpp
     ssp/ssp_cld_problem.cpp
+    ssp/ssp_cld2_problem.cpp
     ssp/ssp_loader.cpp
     covset/covset_problem.cpp
     covset/covset_cld_problem.cpp
@@ -57,9 +58,22 @@ add_executable(test_ssp_shift ssp/test_ssp.cpp)
 target_link_libraries(test_ssp_shift PRIVATE v1ld_generic_core)
 target_compile_options(test_ssp_shift PRIVATE -O2)
 
+add_executable(test_ssp_bnb ssp/test_ssp_bnb.cpp)
+target_link_libraries(test_ssp_bnb PRIVATE v1ld_generic_core)
+target_compile_options(test_ssp_bnb PRIVATE -O2)
+
 add_executable(bench_ssp tests/bench_ssp.cpp)
 target_link_libraries(bench_ssp PRIVATE v1ld_generic_core)
 target_compile_options(bench_ssp PRIVATE -O3 -march=native)
+
+add_executable(bench_ssp_v1cld tests/bench_ssp_v1cld.cpp)
+target_link_libraries(bench_ssp_v1cld PRIVATE v1ld_generic_core)
+target_compile_options(bench_ssp_v1cld PRIVATE -O3 -march=native)
+
+add_executable(bench_ssp_v1cld2 tests/bench_ssp_v1cld2.cpp)
+target_link_libraries(bench_ssp_v1cld2 PRIVATE v1ld_generic_core)
+target_compile_options(bench_ssp_v1cld2 PRIVATE -O3 -march=native)
+
 target_compile_options(v1ld_generic_core PRIVATE -O3 -march=native)
 target_link_libraries(v1ld_generic_core PUBLIC ortools::ortools)
 
@@ -77,6 +91,8 @@ target_link_libraries(gecode_solver_core PUBLIC
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel)
 target_link_libraries(bench_ssp PRIVATE gecode_solver_core)
+target_link_libraries(bench_ssp_v1cld PRIVATE gecode_solver_core)
+target_link_libraries(bench_ssp_v1cld2 PRIVATE gecode_solver_core)
 
 # ── Module Python v1LD générique (uniquement si pybind11 est disponible) ──────
 if(pybind11_FOUND)

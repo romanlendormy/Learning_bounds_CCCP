@@ -64,12 +64,12 @@
  * le même MKPSharedData en lecture seule, qui vit dans la fonction appelante.
  */
 
-#include "../solver_generic/v1ld_base.hpp"
-#include "../solver_generic/v1ld_solver.hpp"
-#include "../solver_generic/v1cld_base.hpp"
-#include "../solver_generic/v1cld_solver.hpp"
-#include "../solver_generic/mkp/mkp_problem_bnb.hpp"
-#include "../solver_generic/mkp/mkp_cld_problem.hpp"
+#include "../../solver_generic/v1ld_base.hpp"
+#include "../../solver_generic/v1ld_solver.hpp"
+#include "../../solver_generic/v1cld_base.hpp"
+#include "../../solver_generic/v1cld_solver.hpp"
+#include "../../solver_generic/mkp/mkp_problem_bnb.hpp"
+#include "../../solver_generic/mkp/mkp_cld_problem.hpp"
 
 #include <gecode/int.hh>
 #include <gecode/minimodel.hh>

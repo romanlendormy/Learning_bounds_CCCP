@@ -20,7 +20,7 @@
  *   (3 + n + N champs — sans ub_node ni incumbent)
  */
 
-#include "../solver_bab/gecode_bab.hpp"
+#include "../solver_bab/mkp/gecode_bab.hpp"
 
 #include <fstream>
 #include <vector>

@@ -72,7 +72,10 @@ public:
     std::pair<double, Vec1d> solve_theta(const Vec1d& cost) const override;
     std::pair<double, Vec1d> solve_zeta(int i, const Vec1d& cost) const override;
 
-private:
+protected:
+    // Accès protégé : nécessaire à SSPProblemBnB (solver_generic/ssp/ssp_problem_bnb.hpp)
+    // qui surcharge solve_theta/solve_zeta avec un masque de variables fixées
+    // (résiduel B&B) et a besoin des mêmes données de DFA / adjacence.
     int    E_, T_, N_, Q_;
     double epsilon_;
     Vec1d  c_, p_;
@@ -91,7 +94,22 @@ private:
     Vec2i demand_;   // (N, T)
 
     // ── DP interne pour un employé e ─────────────────────────────────────────
-    // Retourne (valeur optimale, séquence d'actions [T])
+    // mask_row (taille T, optionnel) : mask_row[t] ∈ {-1, 0..3}. -1 = période
+    // libre (comportement inchangé) ; sinon la seule transition autorisée à
+    // t est celle de symbole mask_row[t] (utilisé par SSPProblemBnB pour
+    // résoudre le sous-problème résiduel d'un nœud B&B, où certaines périodes
+    // de l'employé sont déjà fixées par les décisions de branchement).
+    // Retourne (valeur optimale, séquence d'actions [T]).
     std::pair<double, std::vector<int>>
-    dp_one_employee(int e, const Vec1d& cost) const;
+    dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row = nullptr) const;
+
+    // ── Variantes masquées de solve_theta/solve_zeta ─────────────────────────
+    // mask (E×T, optionnel) : mask[e][t] ∈ {-1, 0..3}, -1 = libre.
+    // mask == nullptr  →  comportement rigoureusement identique à
+    // solve_theta(cost)/solve_zeta(i, cost) (c'est ce que ceux-ci appellent).
+    // Utilisées par SSPProblemBnB pour le sous-problème résiduel d'un nœud B&B.
+    std::pair<double, Vec1d>
+    solve_theta_masked(const Vec1d& cost, const Vec2i* mask = nullptr) const;
+    std::pair<double, Vec1d>
+    solve_zeta_masked(int i, const Vec1d& cost, const Vec2i* mask = nullptr) const;
 };

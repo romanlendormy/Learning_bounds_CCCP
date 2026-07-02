@@ -5,7 +5,7 @@
  *   bab_mkp_gecode_base <dataset.txt> [epsilon=0.1] [time_limit_s=-1] [replication=0]
  */
 
-#include "../gecode_base/gecode_solver.hpp"
+#include "../../gecode_base/gecode_solver.hpp"
 
 #include <fstream>
 #include <iomanip>

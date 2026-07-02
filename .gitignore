@@ -38,6 +38,8 @@ data/knapsack/datasets-pisinger/
 data/knapsack/pisinger
 data/train_v1cld
 data/ssp
+data/ssp_collect/
+data/ssp_generate/
 data/train_base/
 data/train_base_s30/
 data/train_N*/
@@ -61,3 +63,8 @@ gnn/*.png
 
 # Checkpoints GNN (volumineux, recréables via les scripts d'entraînement)
 gnn/runs/
+
+# Résultats de benchmark (recréables via les scripts run_bench_*)
+solver_generic/bench_ssp*.csv
+solver_generic/bench_ssp*.png
+solver_generic/run_e3t8.csv

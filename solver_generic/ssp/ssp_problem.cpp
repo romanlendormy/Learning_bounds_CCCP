@@ -106,7 +106,7 @@ SSPShiftProblem::SSPShiftProblem(
 // Retourne (valeur_optimale, actions[T]) où actions[t] = σ choisi à l'étape t.
 
 std::pair<double, std::vector<int>>
-SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost) const
+SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row) const
 {
     const int base = e * T_ * SSP_SIGMA_SIZE;
 
@@ -124,11 +124,13 @@ SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost) const
 
     for (int t = 0; t < T_; ++t) {
         std::fill(dp_new.begin(), dp_new.end(), NEG_INF);
+        const int forced = (mask_row && (*mask_row)[t] >= 0) ? (*mask_row)[t] : -1;
 
         for (int q = 0; q < Q_; ++q) {
             if (dp[q] <= NEG_INF / 2) continue;  // état non atteignable
 
             for (auto [sigma, q_next] : adj_[q]) {
+                if (forced >= 0 && sigma != forced) continue;  // période masquée : symbole imposé
                 double v = dp[q] + cost[base + t * SSP_SIGMA_SIZE + sigma];
                 if (v > dp_new[q_next]) {
                     dp_new[q_next]                  = v;
@@ -188,11 +190,18 @@ SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost) const
 
 std::pair<double, Vec1d> SSPShiftProblem::solve_theta(const Vec1d& cost) const
 {
+    return solve_theta_masked(cost, nullptr);
+}
+
+std::pair<double, Vec1d>
+SSPShiftProblem::solve_theta_masked(const Vec1d& cost, const Vec2i* mask) const
+{
     Vec1d  x(n_vars(), 0.0);
     double total = 0.0;
 
     for (int e = 0; e < E_; ++e) {
-        auto [val, actions] = dp_one_employee(e, cost);
+        const Vec1i* mask_row = mask ? &(*mask)[e] : nullptr;
+        auto [val, actions] = dp_one_employee(e, cost, mask_row);
         total += val;
         for (int t = 0; t < T_; ++t)
             x[e * T_ * SSP_SIGMA_SIZE + t * SSP_SIGMA_SIZE + actions[t]] = 1.0;
@@ -215,6 +224,12 @@ std::pair<double, Vec1d> SSPShiftProblem::solve_theta(const Vec1d& cost) const
 
 std::pair<double, Vec1d> SSPShiftProblem::solve_zeta(int i, const Vec1d& cost) const
 {
+    return solve_zeta_masked(i, cost, nullptr);
+}
+
+std::pair<double, Vec1d>
+SSPShiftProblem::solve_zeta_masked(int i, const Vec1d& cost, const Vec2i* mask) const
+{
     // Infaisabilité structurelle immédiate (demande > nombre d'employés)
     for (int t = 0; t < T_; ++t) {
         if (demand_[i][t] > E_)
@@ -223,12 +238,15 @@ std::pair<double, Vec1d> SSPShiftProblem::solve_zeta(int i, const Vec1d& cost) c
 
     sat::CpModelBuilder model;
 
-    // ── Variables : shift[e][t] ∈ {0,1,2,3} ──────────────────────────────────
+    // ── Variables : shift[e][t] ∈ {0,1,2,3} (ou fixé si masqué) ──────────────
     std::vector<std::vector<sat::IntVar>> shift(
         E_, std::vector<sat::IntVar>(T_));
     for (int e = 0; e < E_; ++e)
-        for (int t = 0; t < T_; ++t)
-            shift[e][t] = model.NewIntVar(Domain(0, SSP_SIGMA_SIZE - 1));
+        for (int t = 0; t < T_; ++t) {
+            int forced = (mask && (*mask)[e][t] >= 0) ? (*mask)[e][t] : -1;
+            shift[e][t] = model.NewIntVar(
+                forced >= 0 ? Domain(forced, forced) : Domain(0, SSP_SIGMA_SIZE - 1));
+        }
 
     // ── Contraintes d'automate : AddAutomaton par employé ─────────────────────
     // AddAutomaton(vars, starting_state: int, final_states: Span<const int>)

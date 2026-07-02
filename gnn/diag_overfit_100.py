@@ -552,7 +552,7 @@ def main() -> None:
           f"use_film={args.use_film}  scheduler={sched_desc}  depth_alpha={args.depth_alpha}")
 
     # ── 4. Historique par instance (train) + agrégat eval ────────────────────
-    l1_ref: list = []   # L1 de référence sous-gradient (T=50) par graphe, rempli pendant warmup
+    l1_ref: dict = {}   # L1 de référence sous-gradient (T=50) par graphe (clé=gi), rempli pendant warmup
 
     hist_epochs:     list = []
     hist_loss:       dict = {i: [] for i in range(n_total)}
@@ -661,11 +661,11 @@ def main() -> None:
         model.eval()
         with torch.no_grad():
             for gi in wm_indices_all:
-                l1_ref.append(lagrangian_v1ld(lam_targets[gi], graphs_dev[gi]).item())
+                l1_ref[gi] = lagrangian_v1ld(lam_targets[gi], graphs_dev[gi]).item()
         model.train()
         l1_ref_by_N = defaultdict(list)
-        for gi, ref in zip(wm_indices_all, l1_ref):
-            l1_ref_by_N[N_vals[gi]].append(ref)
+        for gi in wm_indices_all:
+            l1_ref_by_N[N_vals[gi]].append(l1_ref[gi])
         ref_summ = "  ".join(
             f"N{Nv}={np.mean(v):.1f}" for Nv, v in sorted(l1_ref_by_N.items())
         )
@@ -783,7 +783,7 @@ def main() -> None:
                 Nv = N_vals[gi]
                 l1_gi = hist_loss[gi][-1]
                 by_N_loss[Nv].append(l1_gi)
-                if l1_ref:
+                if gi in l1_ref:
                     by_N_better[Nv].append(l1_gi < l1_ref[gi])
             summ_parts = []
             for Nv in sorted(by_N_loss):
