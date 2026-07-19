@@ -18,10 +18,7 @@ Research project on learning Lagrangian dual bounds for Chance-Constrained Combi
 │   ├── ssp/             # SSP subproblems (DP automata) + Python loader
 │   └── covset/          # Covset subproblems (greedy + bitmask DP) + Python loader
 │
-├── gecode_base/         # Gecode CP solver bindings (Python)
-│
-└── others/
-    └── z1lp_mkp.py      # z1LP bound for CCMKP (formulation 20, Ahmed et al.)
+└── gecode_base/         # Gecode CP solver bindings (Python)
 ```
 
 ## Solvers

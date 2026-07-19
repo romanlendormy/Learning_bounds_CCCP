@@ -1,0 +1,16 @@
+solver_bab/mkp/instances_kp_bench/kp_n10_N50_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n10_N50_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n10_N100_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n10_N100_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n15_N50_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n15_N50_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n15_N100_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n15_N100_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n20_N50_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n20_N50_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n20_N100_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n20_N100_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n25_N50_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n25_N50_s2.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n25_N100_s1.txt,0
+solver_bab/mkp/instances_kp_bench/kp_n25_N100_s2.txt,0

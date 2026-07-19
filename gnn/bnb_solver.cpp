@@ -151,6 +151,137 @@ static void solve_one(
         if (bb.best_x_bits[ki]) x_out_i[active[ki]] = 1.0;
 }
 
+// ── Variante surrogate (borne agrégée Σ_j u_j·A_i[j][k], u_j = 1/b_i[j], au
+// lieu du minimum de m relaxations séparées) — port fidèle de
+// solver_generic/mkp/mkp_surrogate_bound.hpp dans le style tableaux plats de
+// ce fichier. ζ_i retourne EXACTEMENT la même valeur que solve_one (seule la
+// preuve d'optimalité interne diffère) — validé dans le vrai B&B V1LD
+// séquentiel (gecode_bab.hpp, MKPProblemBnBSurrogate) : mêmes nœuds/objectif,
+// ×2.25 plus rapide (n=20/N=100).
+//
+// Simplification par rapport à solve_one : PAS de sort_j par dimension — un
+// seul tri agrégé sert à la fois de borne ET d'ordre de branchement (comme
+// mkp_problem_bnb_surrogate.cpp), donc pas de "if (ki < idx) continue" : les
+// positions idx..na-1 dans active/agg_w (déjà triés) sont exactement les
+// items non décidés.
+
+struct MkpBnBSurr {
+    const int*    active;  // indices des variables actives dans [0, n_g), triés par ratio agrégé décroissant
+    const double* cost;    // coûts lagrangiens (n_g,), indexé par indice ORIGINAL
+    const double* agg_w;   // poids agrégé, ALIGNÉ sur active (agg_w[pos] = poids de active[pos])
+    const double* u;       // poids par dimension (m,), u[j] = 1/b_i[j]
+    const double* A_i;     // matrice (m, n_g) row-major, comme MkpBnB
+    int na, m, n_g;
+    double best_val;
+    std::vector<int8_t> x_bits, best_x_bits;
+
+    double bound(int idx, const double* rem_b, double val) const {
+        double cap = 0.0;
+        for (int j = 0; j < m; ++j) cap += u[j] * rem_b[j];
+        double v = val;
+        for (int pos = idx; pos < na; ++pos) {
+            double a = agg_w[pos];
+            int    k = active[pos];
+            if      (a < 1e-12)          { v += cost[k]; }
+            else if (a <= cap + 1e-12)   { v += cost[k]; cap -= a; }
+            else                          { v += cost[k] * cap / a; break; }
+        }
+        return v;
+    }
+
+    void run(int idx, double* rem_b, double val) {
+        if (idx == na) {
+            if (val > best_val + 1e-9) { best_val = val; best_x_bits = x_bits; }
+            return;
+        }
+        if (bound(idx, rem_b, val) <= best_val + 1e-9) return;
+
+        int k = active[idx];
+        bool feasible = true;
+        for (int j = 0; j < m; ++j)
+            if (A_i[j * n_g + k] > rem_b[j] + 1e-12) { feasible = false; break; }
+
+        if (feasible) {
+            for (int j = 0; j < m; ++j) rem_b[j] -= A_i[j * n_g + k];
+            x_bits[idx] = 1;
+            run(idx + 1, rem_b, val + cost[k]);
+            x_bits[idx] = 0;
+            for (int j = 0; j < m; ++j) rem_b[j] += A_i[j * n_g + k];
+        }
+        run(idx + 1, rem_b, val);
+    }
+};
+
+static void solve_one_surrogate(
+    int n_g, int m,
+    const double* cost_i,
+    const double* A_i,
+    const double* b_i,
+    double*       x_out_i
+) {
+    std::vector<int> active;
+    active.reserve(n_g);
+    double val_free = 0.0;
+
+    for (int k = 0; k < n_g; ++k) {
+        if (cost_i[k] <= 0.0) continue;
+        bool has_constraint = false;
+        for (int j = 0; j < m; ++j)
+            if (A_i[j * n_g + k] >= 1e-9) { has_constraint = true; break; }
+        if (!has_constraint) { x_out_i[k] = 1.0; val_free += cost_i[k]; }
+        else                 { active.push_back(k); }
+    }
+
+    if (active.empty()) return;
+
+    constexpr double EPS = 1e-9;
+    constexpr double LARGE_PENALTY = 1e12;
+    std::vector<double> u(m);
+    for (int j = 0; j < m; ++j) u[j] = (b_i[j] > EPS) ? (1.0 / b_i[j]) : LARGE_PENALTY;
+
+    int na = static_cast<int>(active.size());
+    std::vector<double> agg_w(na);
+    for (int idx = 0; idx < na; ++idx) {
+        int k = active[idx];
+        double w = 0.0;
+        for (int j = 0; j < m; ++j) w += u[j] * A_i[j * n_g + k];
+        agg_w[idx] = w;
+    }
+
+    // Tri par ratio cost/agg_w décroissant — sert à la fois d'ordre de
+    // branchement et d'ordre de remplissage glouton pour bound().
+    std::vector<int> order(na);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b_idx) {
+        double ra = (agg_w[a] > EPS)      ? cost_i[active[a]]      / agg_w[a]      : 1e18;
+        double rb = (agg_w[b_idx] > EPS)  ? cost_i[active[b_idx]]  / agg_w[b_idx]  : 1e18;
+        return ra > rb;
+    });
+    std::vector<int>    active_sorted(na);
+    std::vector<double> agg_w_sorted(na);
+    for (int idx = 0; idx < na; ++idx) {
+        active_sorted[idx] = active[order[idx]];
+        agg_w_sorted[idx]  = agg_w[order[idx]];
+    }
+
+    MkpBnBSurr bb;
+    bb.active   = active_sorted.data();
+    bb.cost     = cost_i;
+    bb.agg_w    = agg_w_sorted.data();
+    bb.u        = u.data();
+    bb.A_i      = A_i;
+    bb.na = na; bb.m = m; bb.n_g = n_g;
+    bb.best_val = val_free;
+    bb.x_bits.assign(na, 0);
+    bb.best_x_bits.assign(na, 0);
+
+    std::vector<double> rem_b(b_i, b_i + m);
+    bb.run(0, rem_b.data(), val_free);
+
+    for (int ki = 0; ki < na; ++ki)
+        if (bb.best_x_bits[ki]) x_out_i[active_sorted[ki]] = 1.0;
+}
+
 } // namespace
 
 // ── Interface C (ctypes) ──────────────────────────────────────────────────────
@@ -180,6 +311,35 @@ void solve_zeta_batch(
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < N_z; ++i) {
         solve_one(
+            n_g, m,
+            cost  + i * n_g,
+            A     + (size_t)i * m * n_g,
+            b_res + i * m,
+            x_out + i * n_g
+        );
+    }
+}
+
+/*
+ * solve_zeta_batch_surrogate — même contrat que solve_zeta_batch (mêmes
+ * paramètres, même valeur ζ_i retournée EXACTEMENT), mais borne de
+ * branchement agrégée (surrogate) au lieu du minimum de m relaxations
+ * séparées — cf. MkpBnBSurr ci-dessus. Fonction séparée, PAS un paramètre
+ * ajouté à solve_zeta_batch : ne change rien pour les appelants existants
+ * (scripts d'entraînement Python via ctypes, backends GNN natifs non batché/
+ * AOTInductor).
+ */
+void solve_zeta_batch_surrogate(
+    int N_z, int m, int n_g,
+    const double* cost,
+    const double* A,
+    const double* b_res,
+    double*       x_out
+) {
+    std::memset(x_out, 0, sizeof(double) * N_z * n_g);
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < N_z; ++i) {
+        solve_one_surrogate(
             n_g, m,
             cost  + i * n_g,
             A     + (size_t)i * m * n_g,

@@ -82,9 +82,7 @@ def main():
 
     # Modèle
     model = GNN(m=a.m, hidden=a.hidden, lam_max=a.lam_max,
-                use_max_pool=a.use_max_pool,
-                use_theta_attn=a.use_theta_attn,
-                use_film=a.use_film).to(device)
+                use_max_pool=a.use_max_pool).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"Modèle chargé (epoch {ckpt['epoch']})")

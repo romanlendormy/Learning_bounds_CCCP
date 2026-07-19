@@ -50,8 +50,7 @@ _pyg_data_mod = importlib.import_module("torch_geometric.data")
 pyg_data = _pyg_data_mod
 DataLoader = importlib.import_module("torch_geometric.loader").DataLoader
 from torch_geometric.nn import GatedGraphConv
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
-from torch_geometric.utils import softmax as pyg_softmax
+from torch_geometric.nn import global_mean_pool, global_max_pool
 
 # ── Solveur B&B C++ (optionnel, fallback Python si absent) ───────────────────
 import importlib.util as _ilu, pathlib as _pl
@@ -63,11 +62,11 @@ try:
     _bnb_spec.loader.exec_module(_bnb_mod)
     _cpp_solve_zeta_batch = _bnb_mod.solve_zeta_batch
     _USE_CPP_BNB = True
-    print("[bnb_solver] C++ B&B chargé (solve_zeta_batch)")
+    print("[bnb_solver] C++ B&B chargé (solve_zeta_batch)", file=sys.stderr)
 except Exception as _e:
     _cpp_solve_zeta_batch = None
     _USE_CPP_BNB = False
-    print(f"[bnb_solver] fallback Python B&B ({_e})")
+    print(f"[bnb_solver] fallback Python B&B ({_e})", file=sys.stderr)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -571,38 +570,49 @@ class GNN(nn.Module):
     """
     Prédit λ[i,k] ∈ R par nœud (scénario libre i, item actif k).
 
-    Architecture (v21 — 7m+5 node features, context 9-dim, FiLM + max_pool + theta_attn optionnels) :
+    Architecture (7m+5 node features, context 9-dim, max_pool optionnel) :
       embed      : X(7m+5) → hidden → ReLU → hidden → ReLU → LayerNorm
-      [FiLM]     : γ(ctx)⊙h + β(ctx)  — si use_film ; init identité (γ=1, β=0)
       conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
       conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
       proj       : hidden → 4h → ReLU → 2h                    → h_v
-      pool scén  : nœud → scénario [mean] (+ [max] si use_max_pool) → h_scen_i
-      pool graph : scénario → graphe [mean uniforme] ou [θ_i attentionnel] → g_pool (2h)
+      pool item  : nœud → item k [mean] (+ [max] si use_max_pool) → h_item_k
+      pool scén  : nœud → scénario i [mean] (+ [max] si use_max_pool) → h_scen_i
+      pool graph : scénario → graphe [mean] → g_pool (2h)
       norm_ctx   : LayerNorm sur les 9 features de contexte (calculé une seule fois)
-      head       : [h_v | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
+      head       : [h_v | h_item_k | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 1
+
+    `h_item_k` (ajouté 2026-07-07, `diag_scenario_variance.py`) = moyenne
+    (+max) de `h_v` sur les N_z scénarios, à item k fixé — taille n_g,
+    indépendante de N, analogue direct du consensus `x̄_k` de la mise à jour
+    sous-gradient (`verify_v1ld` : `lam[i] += step*(x_bar - xi)`), jamais
+    représenté explicitement dans le head avant ce changement (cf.
+    NOTES_N_scaling_investigation.md, "piste retenue").
+
+    `h_scen_i` réintroduit le même jour après un test isolé (retrait de
+    g_pool ET h_scen_i à la fois) qui a dégradé la qualité de la borne
+    malgré un ICC plus proche de la cible — signe que h_scen_i, bien que
+    redondant en information avec `h_v` (déjà vu via les arêtes
+    item_varies), sert de raccourci d'optimisation utile à budget d'epochs
+    fixé. `g_pool` réintroduit ensuite pour tester si une tête plus riche
+    (rien retiré, seulement h_item_k ajouté à l'architecture originale) fait
+    au moins aussi bien — ablation antérieure avait montré que g_pool seul
+    ne différenciait ni scénarios ni items, mais son retrait combiné à celui
+    de h_scen_i avait dégradé la borne, donc prudence : on ne retire plus
+    rien, on ajoute seulement.
 
     Paramètres :
       m (int)             : nombre de contraintes (détermine NODE_DIM = 7m+5)
       hidden              : dimension des couches cachées (défaut 64)
-      use_max_pool (bool) : si True, pool scén = [mean | max]
-      use_theta_attn (bool) : si True, g_pool = Σ_i attn(θ_i) · h_scen_i
-                              où θ_i est calculé depuis une passe préliminaire λ_pre
-      use_film (bool)     : si True, FiLM conditioning après l'embed
-                            (le contexte module le message-passing dès le début)
+      use_max_pool (bool) : si True, pool item/scén = [mean | max]
     """
     CONTEXT_DIM = 9  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(N_z), N_z/n_g]
 
-    def __init__(self, m: int = 2, hidden: int = 64, lam_max: float = 0.0,
-                 use_max_pool: bool = False, use_theta_attn: bool = False,
-                 use_film: bool = False):
+    def __init__(self, m: int = 2, hidden: int = 64,
+                 use_max_pool: bool = False):
         super().__init__()
-        self.m              = m
-        self.hidden         = hidden
-        self.lam_max        = lam_max
-        self.use_max_pool   = use_max_pool
-        self.use_theta_attn = use_theta_attn
-        self.use_film       = use_film
+        self.m            = m
+        self.hidden       = hidden
+        self.use_max_pool = use_max_pool
         node_dim    = 7 * m + 5
 
         self.embed = nn.Sequential(
@@ -619,28 +629,19 @@ class GNN(nn.Module):
             nn.Linear(4 * hidden, 2 * hidden),
         )
         self.norm_ctx = nn.LayerNorm(self.CONTEXT_DIM)
-        # pool scén : 2h (mean seul) ou 4h (mean+max)
+        # pool item / scén : 2h chacun (mean seul) ou 4h (mean+max)
+        item_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
         scen_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
-        # h_v(2h) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(9) — g_pool toujours 2h
-        head_in = 2 * hidden + scen_pool_dim + 2 * hidden + self.CONTEXT_DIM
+
+        # h_v(2h) + h_item_k(item_pool_dim) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(9)
+        head_in = 2 * hidden + item_pool_dim + scen_pool_dim + 2 * hidden + self.CONTEXT_DIM
         self.head = nn.Sequential(
             nn.Linear(head_in, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),  nn.ReLU(),
             nn.Linear(hidden, 1),
         )
-        if use_theta_attn:
-            # Passe préliminaire : h_v → λ_pre → θ_i différentiable
-            self.lam_pre    = nn.Linear(2 * hidden, 1)
-            self.theta_temp = nn.Parameter(torch.ones(1))
-        if use_film:
-            # FiLM : ctx (9) → (γ, β) de dim hidden chacun
-            # Init identité : γ=1, β=0 → comportement sans FiLM au départ
-            self.film = nn.Linear(self.CONTEXT_DIM, 2 * hidden)
-            nn.init.zeros_(self.film.weight)
-            self.film.bias.data[:hidden] = 1.0   # γ = 1
-            self.film.bias.data[hidden:] = 0.0   # β = 0
 
-    def forward(self, data: pyg_data.Data) -> torch.Tensor:
+    def forward(self, data: pyg_data.Data, return_hidden: bool = False):
         x, ei, ew = data.x, data.edge_index, data.edge_weight
         batch = getattr(data, "batch", None)
         if batch is None:
@@ -649,31 +650,42 @@ class GNN(nn.Module):
         dev      = x.device
         n_graphs = int(batch.max().item()) + 1
 
-        # ── Contexte normalisé (une seule fois — réutilisé par FiLM et la tête) ─
+        # ── Contexte normalisé (une seule fois — réutilisé par la tête) ─────────
         ctx = data.context
         if ctx.dim() == 1:
             ctx = ctx.unsqueeze(0)
         ctx_norm = self.norm_ctx(ctx)                                  # (1 or B, 9)
 
         # ── Message passing ───────────────────────────────────────────────────
-        h = self.norm_embed(self.embed(x))
-        if self.use_film:
-            film_out = self.film(ctx_norm)                             # (1 or B, 2h)
-            gamma    = film_out[..., :self.hidden]                     # (1 or B, h)
-            beta     = film_out[..., self.hidden:]                     # (1 or B, h)
-            h        = gamma[batch] * h + beta[batch]                  # (V, h)
+        h_embed = self.norm_embed(self.embed(x))
+        h = h_embed
         h1  = self.norm1(self.conv1(h,  ei, ew))
         h2  = self.norm2(self.conv2(h1, ei, ew)) + h1
         h_v = self.proj(h2)                                        # (V, 2h)
 
-        # ── Pooling hiérarchique : nœud → scénario → graphe ──────────────────
-        # Nœuds ordonnés i_idx*n_g + k_idx ; n_g consécutifs = un scénario.
+        # ── Pooling item-consensus (x̄_k) et scénario (h_scen_i) ───────────────
+        # Nœuds ordonnés i_idx*n_g + k_idx ; n_g consécutifs = un scénario, donc
+        # k_idx = local_idx % n_g identifie l'item indépendamment du scénario,
+        # et i_idx = local_idx // n_g identifie le scénario indépendamment de
+        # l'item. NB : suppose n_g uniforme sur le batch (hypothèse déjà faite
+        # par l'ancien pooling scénario — pas une nouvelle limitation).
         n_g = data.n_g if isinstance(data.n_g, int) else int(data.n_g.item())
 
         counts   = torch.bincount(batch, minlength=n_graphs)
         node_off = torch.zeros(n_graphs, dtype=torch.long, device=dev)
         node_off[1:] = counts[:-1].cumsum(0)
         local_idx = torch.arange(n_v, dtype=torch.long, device=dev) - node_off[batch]
+
+        item_off   = torch.arange(n_graphs, device=dev) * n_g
+        item_batch = item_off[batch] + (local_idx % n_g)            # (V,)
+
+        h_item_mean = global_mean_pool(h_v, item_batch)               # (Σ n_g, 2h)
+        if self.use_max_pool:
+            h_item_max = global_max_pool(h_v, item_batch)          # (Σ n_g, 2h)
+            h_item = torch.cat([h_item_mean, h_item_max], dim=-1)  # (Σ n_g, 4h)
+        else:
+            h_item = h_item_mean                                    # (Σ n_g, 2h)
+        h_item_exp = h_item[item_batch]                            # (V, 2h or 4h)
 
         n_scen_per = counts // n_g
         scen_off   = torch.zeros(n_graphs, dtype=torch.long, device=dev)
@@ -688,51 +700,23 @@ class GNN(nn.Module):
             h_scen = h_scen_mean                                   # (Σ N_z, 2h)
         h_scen_exp = h_scen[scen_batch]                            # (V, 2h or 4h)
 
-        # g_pool : résumé global (mean uniforme ou attentionnel selon θ_i)
-        if self.use_theta_attn:
-            # Passe préliminaire : λ_pre → cost_pre → θ_i = Σ_k max(0, cost_ik)
-            c_scale_f = float(data.c_scale)
-            N_val     = float(data.N)
-            lam_pre   = self.lam_pre(h_v).squeeze(-1) * c_scale_f / N_val  # (V,)
-
-            # Λ_sum[i,k] = Σ_i lam_pre[i,k] — scatter par (graphe, item)
-            item_idx_global = batch * n_g + (local_idx % n_g)              # (V,)
-            Lambda_sum_gi   = global_add_pool(
-                lam_pre.unsqueeze(-1), item_idx_global).squeeze(-1)        # (B*n_g,)
-            Lambda_sum_v    = Lambda_sum_gi[item_idx_global]               # (V,)
-
-            # c_g par nœud — c_g est (n_g,) pour graph unique, (B*n_g,) si batché
-            n_c_g = data.c_g.shape[0]
-            if n_c_g == n_g:
-                c_g_v = data.c_g[local_idx % n_g]
-            else:
-                c_g_v = data.c_g[item_idx_global]
-
-            cost_pre   = c_g_v + lam_pre * N_val - Lambda_sum_v           # (V,)
-            theta_i    = global_add_pool(
-                torch.clamp(cost_pre, min=0).unsqueeze(-1),
-                scen_batch).squeeze(-1)                                    # (Σ N_z,)
-
-            # Softmax par graphe sur log1p(θ_i) pour stabilité numérique
-            scen_graph_batch = torch.repeat_interleave(
-                torch.arange(n_graphs, device=dev), n_scen_per)           # (Σ N_z,)
-            temp = self.theta_temp.abs().clamp(min=1e-3)
-            attn_w = pyg_softmax(
-                torch.log1p(theta_i) / temp, scen_graph_batch)            # (Σ N_z,)
-
-            g_pool = global_add_pool(
-                h_scen_mean * attn_w.unsqueeze(-1),
-                scen_graph_batch)                                          # (B, 2h)
-        else:
-            g_pool  = global_mean_pool(h_v, batch)                        # (B, 2h)
-        g_exp   = g_pool[batch]                                            # (V, 2h)
-
         ctx_exp = ctx_norm[batch]                                          # (V, 9)
 
-        cat     = torch.cat([h_v, h_scen_exp, g_exp, ctx_exp], dim=-1)
+        g_pool  = global_mean_pool(h_v, batch)                        # (B, 2h)
+        g_exp   = g_pool[batch]                                            # (V, 2h)
+
+        cat     = torch.cat([h_v, h_item_exp, h_scen_exp, g_exp, ctx_exp], dim=-1)
         h_out   = self.head(cat).squeeze(-1)
-        lam_unscaled = h_out * data.c_scale / float(data.N)
-        lam = self.lam_max * torch.tanh(lam_unscaled / self.lam_max) if self.lam_max > 0 else lam_unscaled
+
+        lam = h_out * data.c_scale / float(data.N)
+        if return_hidden:
+            # Diagnostic uniquement (bottleneck de pooling) : h_v (par nœud),
+            # h_item_mean (par item), h_scen_mean (par scénario), avant concat max.
+            extra = {"x": x, "h_embed": h, "h1": h1, "h2": h2,
+                     "h_v": h_v, "h_item_mean": h_item_mean, "item_batch": item_batch,
+                     "h_scen_mean": h_scen_mean, "scen_batch": scen_batch,
+                     "g_pool": g_pool, "h_out": h_out}
+            return lam, extra
         return lam
 
 
@@ -941,12 +925,29 @@ def verify_v1ld(
     lam_init:  np.ndarray | None = None,
     return_n_iters: bool = False,
     return_lam: bool = False,
+    step_mode: str = "sqrt",
+    step_value: float | None = None,
+    v_lower: float | None = None,
+    step_offset: float = 1.0,
 ) -> float | tuple:
     """
-    Reproduit l'algorithme v1ld_solver.cpp en Python pur (pas 1/√(t+1))
-    et retourne la meilleure L1 vue.
+    Reproduit l'algorithme v1ld_solver.cpp en Python pur et retourne la
+    meilleure L1 vue.
 
     lam_init : (N_z, n_g) float64 ; None = cold start λ=0.
+
+    step_mode : schéma de pas de descente sous-gradient — même sémantique que
+      `v1ld_solver.cpp` (paramètre `v_lower`, cf. son docstring) :
+      - "sqrt"   (défaut) : step = 1/√(t+step_offset), comportement historique
+                   inchangé pour step_offset=1.0. Un step_offset plus grand
+                   amortit le premier pas (utile en warm-start : évite qu'un
+                   pas de magnitude 1.0 n'écrase un λ_0 déjà informatif).
+      - "fixed"  : step = step_value constant.
+      - "polyak" : step = (L1 − v_lower)/‖g‖² si L1 > v_lower et ‖g‖² > 1e-14,
+                   sinon fallback sur 1/√(t+1) (même garde-fou que le C++).
+                   v_lower doit être fourni (ex. data.opt, ou l'incumbent en
+                   B&B réel) — c'est une borne inférieure supposée valide sur
+                   l'optimum du dual, pas une garantie.
     """
     N_z        = data.N_z
     n_g        = data.n_g
@@ -1019,7 +1020,18 @@ def verify_v1ld(
             xi = x_zeta[i] if y_star[i] > 0.5 else x_theta[i]
             x_bar += p_unif * xi
 
-        step = 1.0 / np.sqrt(t + 1)
+        if step_mode == "fixed":
+            step = step_value
+        elif step_mode == "polyak":
+            gnorm_sq = 0.0
+            for i in range(N_z):
+                xi = x_zeta[i] if y_star[i] > 0.5 else x_theta[i]
+                gnorm_sq += np.sum((xi - x_bar) ** 2)
+            gap = L1 - v_lower
+            step = (gap / gnorm_sq) if (gap > 0.0 and gnorm_sq > 1e-14) \
+                else 1.0 / np.sqrt(t + 1)
+        else:  # "sqrt"
+            step = 1.0 / np.sqrt(t + step_offset)
 
         for i in range(N_z):
             xi = x_zeta[i] if y_star[i] > 0.5 else x_theta[i]

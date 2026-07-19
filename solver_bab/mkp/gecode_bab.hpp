@@ -69,7 +69,9 @@
 #include "../../solver_generic/v1cld_base.hpp"
 #include "../../solver_generic/v1cld_solver.hpp"
 #include "../../solver_generic/mkp/mkp_problem_bnb.hpp"
+#include "../../solver_generic/mkp/mkp_problem_bnb_surrogate.hpp"
 #include "../../solver_generic/mkp/mkp_cld_problem.hpp"
+#include "gnn_bound_backend.hpp"
 
 #include <gecode/int.hh>
 #include <gecode/minimodel.hh>
@@ -78,7 +80,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
 
 using namespace Gecode;
@@ -86,7 +92,24 @@ using namespace Gecode;
 // ── Mode de calcul de la borne aux nœuds ─────────────────────────────────────
 // V1LD  : ζᵢ résolu exactement (B&B multi-dim)   → borne serrée, lent
 // V1CLD : ζᵢⱼ LP-relax 1D (min sur j)             → borne lâche, rapide
-enum class BoundMode { V1LD, V1CLD };
+// GNN   : borne one-shot prédite par un GNN pré-entraîné (gnn_v1ld_client.hpp)
+//         — pas de descente de sous-gradient, un seul aller-retour vers un
+//         process Python persistant par appel more() — À CHAQUE nœud.
+// GNN_ROOT : même inférence GNN one-shot, mais UNE SEULE FOIS (au premier
+//         appel more() de chaque lignée, cf. lambda_warmed) — tous les appels
+//         suivants se comportent comme REF (aucune borne recalculée/postée).
+//         Teste si la seule borne de racine, sans la repayer à chaque nœud,
+//         suffit à élaguer utilement l'arbre (compromis coût/qualité opposé
+//         au mode GNN plein).
+// REF   : squelette V1LD NU — même classe, même heuristique de branchement
+//         (ordre RATIO), même amorçage d'incumbent glouton, même moteur DFS
+//         maison (solve_gecode_bab_mkp) — mais more() ne reconstruit AUCUN
+//         sous-problème et ne calcule/poste AUCUNE borne. Sert de référence
+//         pour comparer "Gecode base" (BAB natif Gecode, ordre de déclaration,
+//         pas d'incumbent initial) à V1LD/V1CLD à heuristique/moteur FIXÉS :
+//         l'écart base vs REF isole l'effet du branchement+incumbent+moteur ;
+//         l'écart REF vs V1LD/V1CLD isole l'effet de la borne seule.
+enum class BoundMode { V1LD, V1CLD, GNN, GNN_ROOT, REF };
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MKPSharedData — données partagées entre tous les espaces Gecode
@@ -114,9 +137,29 @@ struct MKPSharedData {
 
     // ── Représentation entière pour Gecode ────────────────────────────────────
     // Gecode n'accepte que des int dans linear() et dans les domaines de IntVar.
-    // On multiplie tous les coefficients par SCALE=1000 pour conserver 3 décimales.
+    // On multiplie tous les coefficients par SCALE pour conserver les décimales.
     // Attention : obj est aussi scalé, il faudra diviser par SCALE en fin de résolution.
-    static constexpr int SCALE = 1000;
+    //
+    // SCALE=10000 (4 décimales) et NON 1000 (3 décimales) : les datasets
+    // ccmk-song-pisinger-*.txt ont des coûts c[] ET coefficients A[] à 4
+    // décimales (ex. c=470.7849). À SCALE=1000, llround(c[k]*1000) perd la
+    // 4e décimale : la somme flottante EXACTE `fp` (utilisée par more()/la
+    // borne GNN pour décider obj<=ceil(ub*SCALE)) peut alors différer de la
+    // somme des c_int RÉELLEMENT vue par Gecode (obj.min()) — jusqu'à un plein
+    // SCALE unit sur quelques items. Sur l'instance n=20/N=20 rep=0
+    // (ccmk-song-pisinger-n20-m5-a50-we-r42-S20.txt), cet écart d'arrondi
+    // faisait basculer un nœud-limite (ub calculé EXACTEMENT égal à
+    // l'optimum, à 0.001 près) vers une contradiction CP immédiate en mode
+    // GNN batché (bab_mkp_gecode_gnn_batched), éliminant silencieusement la
+    // branche optimale et produisant un faux certificat OPTIMAL à 5130.397
+    // au lieu du vrai 5166.381 — cf. mémoire
+    // project_gnn_batched_false_optimal_bug_investigation. Confirmé par test
+    // direct : SCALE=10000 corrige ce cas (job SLURM 16385256, 2026-07-16),
+    // TF32 cuBLAS/cuDNN désactivé NE corrige PAS (écarté). Vérifié aussi que
+    // SCALE=10000 ne fait pas déborder int32 sur tous les datasets
+    // disponibles (headroom ≥ 5.9x sur obj_max et sur la somme de chaque
+    // contrainte linéaire).
+    static constexpr int SCALE = 10000;
     std::vector<int>                           c_int;   // c × SCALE
     std::vector<std::vector<std::vector<int>>> A_int;   // A × SCALE (arrondi)
     std::vector<std::vector<int>>              b_int;   // b × SCALE (floor, conservatif)
@@ -124,6 +167,14 @@ struct MKPSharedData {
 
     // ── Options V1LD pour les appels dans more() ──────────────────────────────
     BoundMode bound_mode = BoundMode::V1LD;  // V1LD (exact) ou V1CLD (LP-relax)
+    // Mode V1LD uniquement (ignoré en V1CLD) : méthode utilisée pour ζ_i à
+    // chaque nœud. false (défaut) = MKPProblemBnB (Dantzig + LP-relax par
+    // dimension, méthode historique/prod). true = MKPProblemBnBSurrogate
+    // (même ζ_i exact, borne de branchement surrogate — cf.
+    // mkp_surrogate_bound.hpp) : comparaison expérimentale demandée pour
+    // évaluer si une borne de branchement plus serrée réduit le temps ζ_i
+    // dans le VRAI B&B (pas seulement le benchmark isolé bench_v1ld_subproblems).
+    bool   use_surrogate_zeta = false;
     int    T_root     = 200;   // itérations sous-gradient au premier appel (λ=0, cold start)
     int    T_node     = 30;    // itérations sous-gradient aux nœuds suivants (warm-start)
     double rel_tol    = 1e-4;  // tolérance d'arrêt anticipé du sous-gradient
@@ -159,8 +210,110 @@ struct MKPSharedData {
     mutable int ub_tightened        = 0;    // appels où la borne réduit obj.max()
     mutable int fails_from_bound    = 0;    // appels où la borne crée une contradiction directe
     mutable double best_open_ub     = 0.0;  // meilleure UB vue sur un nœud non-élagué
-    mutable double root_bound_time_s = 0.0; // durée du cold start (premier appel more(), T_root iters)
+    mutable double root_bound_time_s = 0.0; // durée du cold start (premier appel more() où la borne est CALCULÉE, T_root iters)
+    mutable double root_bound_value  = 0.0; // valeur ub calculée au premier appel more() où la borne est calculée ; 0.0 en mode REF (pas de borne).
+                                             // = valeur à la racine SAUF si gnn_min_depth_frac > 0 (mode GNN) : dans ce cas
+                                             // c'est la valeur au premier nœud atteignant le seuil de profondeur, pas la racine.
     mutable double t_bound_total_s   = 0.0; // temps total cumulé dans tous les appels more()
+
+    // ── Diagnostic : coût du clonage d'espace (Space::copy(), un par nœud) ────
+    // Isole le temps passé à copier NOTRE état (lambda_v1ld/lambda_v1cld/b_res/
+    // fixed_mask), distinct du reste de t_bab_pure_s (clonage natif Gecode des
+    // BoolVarArray/propagateurs + propagation CP + dispatch du BoundBrancher).
+    mutable int64_t clone_count      = 0;   // nb d'appels à MKPSpaceV1LD::copy()
+    mutable double  t_clone_state_s  = 0.0; // temps cumulé à copier lambda/b_res/fixed_mask
+    mutable double  t_clone_total_s  = 0.0; // temps cumulé du clonage COMPLET (base Gecode + notre état)
+
+    // ── Statistiques par profondeur ───────────────────────────────────────────
+    // Objectif : détecter une profondeur au-delà de laquelle calculer la borne
+    // (V1LD/V1CLD/GNN) ne provoque plus aucun fail, pour évaluer si on peut
+    // arrêter de la recalculer/poster passé ce seuil (compromis coût/qualité).
+    // Indexées par depth = nombre de variables x fixées au moment de l'appel
+    // more() (0 = racine, n = feuille) — même définition que /*depth=*/ dans
+    // le bloc GNN ci-dessous. Taille n+1, allouée à la construction. Non
+    // peuplées en mode REF ni pour les appels GNN_ROOT court-circuités après
+    // le premier (aucune borne calculée à ces appels — cf. more()).
+    mutable std::vector<int64_t> nodes_by_depth;           // more() ayant atteint l'étape 1 (scan) à cette depth
+    mutable std::vector<int64_t> ub_tightened_by_depth;    // sous-ensemble : borne resserre obj.max()
+    mutable std::vector<int64_t> fails_from_bound_by_depth; // sous-ensemble : fail immédiat dû à la borne
+    // Temps cumulé (s) passé à calculer+poster la borne à cette depth — même
+    // "elapsed_bound" que t_bound_total_s, mais réparti par profondeur. Sert à
+    // juger la RENTABILITÉ (coût/utilité), pas seulement l'utilité : une depth
+    // sans fail mais où la borne est déjà quasi gratuite n'a pas le même
+    // verdict qu'une depth sans fail où elle reste coûteuse (ex. GNN : le
+    // coût par nœud ne décroît pas nécessairement avec la profondeur comme le
+    // fait celui de V1LD/V1CLD, dont le sous-problème résiduel rétrécit).
+    mutable std::vector<double>  t_bound_by_depth;
+
+    // ── Mode GNN (bound_mode == BoundMode::GNN) ───────────────────────────────
+    // gnn_client n'est PAS possédé ici (durée de vie gérée par
+    // solve_gecode_bab_mkp, qui outlive tous les clones d'espace — même
+    // patron que ce struct lui-même vis-à-vis des MKPSpaceV1LD). Interface
+    // commune aux deux backends (IPC ou natif LibTorch) — cf. gnn_bound_backend.hpp.
+    GNNBoundBackend* gnn_client = nullptr;
+    // Seuil de profondeur relative (depth/n) en dessous duquel l'appel GNN est
+    // sauté en mode GNN (comportement REF local pour CE nœud : aucune borne
+    // calculée/postée, more_calls et nodes_by_depth restent comptabilisés).
+    // Motivation empirique : sweep de robustesse job 16186510 (8 instances,
+    // n∈{10,20} × N∈{20,50,100,500}) — fails_from_bound_by_depth == 0 pour
+    // depth/n < ~0.5 dans 6/8 configs (les 2 exceptions, à N=500, dévient de
+    // ±10 points sur des comptes de 1-2 fails — probablement du bruit
+    // d'échantillonnage sur une seule instance). Défaut 0.0 = comportement
+    // GNN historique inchangé (borne calculée à chaque nœud dès la racine).
+    // Ignoré en mode GNN_ROOT (déjà gated par lambda_warmed, cf. more()).
+    double gnn_min_depth_frac = 0.0;
+    // Seuil sur un proxy LOCAL (par nœud, pas par profondeur) : gap_rel =
+    // (obj.max() - obj.min()) / obj.max(), lu APRÈS propagation CP héritée
+    // des ancêtres mais AVANT tout calcul de borne à ce nœud (donc gratuit,
+    // aucun appel GNN nécessaire pour l'évaluer). L'appel GNN est sauté si
+    // gap_rel > gnn_min_gap_frac (domaine encore trop large pour qu'une borne
+    // avec l'écart typique du GNN — ~20% à la racine — puisse faire fail).
+    // Motivation empirique (trace GNN_TRACE_DEBUG, n=20/N=100, job 16437043,
+    // analyse offline) : gap_rel médian ≈5.1% sur les nœuds où la borne cause
+    // un fail contre ≈9.6% sur les autres, séparation stable à profondeur
+    // fixée (pas un artefact de profondeur) — cf. mémoire "gnn_local_proxy_gate".
+    // Défaut 0.0 = comportement historique (borne calculée à chaque nœud).
+    double gnn_min_gap_frac = 0.0;
+    // Symétrique de gnn_min_depth_frac : seuil de profondeur relative
+    // au-DESSUS duquel l'appel GNN est sauté (arrête de calculer/poster la
+    // borne une fois "assez profond", au lieu de près de la racine). Motivation :
+    // à n=20/N=100 (job 16206556), la majorité des nœuds more() ET des fails
+    // imputables à la borne se concentrent aux profondeurs profondes
+    // (depth/n ≈ 0.5-0.95), pas près de la racine — gnn_min_depth_frac=0.5 n'y
+    // gagnait donc que 3-8% (la zone gatée pesait peu). Couper plutôt le fond
+    // de l'arbre teste le compromis inverse : économiser le gros du coût de
+    // borne (là où il y a le plus de nœuds) au prix de la perte du pruning là
+    // où la borne s'avère le plus souvent utile. Défaut 1.0 = jamais sauté
+    // (comportement historique, depth <= n toujours).
+    double gnn_max_depth_frac = 1.0;
+    // Si true, BoundBrancher::commit() ne calcule PLUS la borne lui-même
+    // (fixation de la variable seulement) — c'est au driver (boucle DFS de
+    // solve_gecode_bab_mkp) d'appeler explicitement more() APRÈS un premier
+    // status() de propagation CP pure. Motivation (cf. revue niveau 1 point
+    // A) : dans le comportement historique (false), more() — et donc le coût
+    // GNN complet (graphe+forward+ζ) — est payé pour CHAQUE nœud AVANT que
+    // la propagation CP native (contraintes de capacité réifiées, chance
+    // constraint) ait la moindre chance de le faire échouer gratuitement ;
+    // fails_from_cp (= fails − fails_from_bound) mesure combien de ces
+    // appels sont gaspillés sur des nœuds que le CP seul aurait de toute
+    // façon tués. gecode_bab_gnn_batched.cpp appliquait déjà ce découplage
+    // (SimpleBrancher::commit() ne calcule aucune borne) mais jamais
+    // reporté ici. Défaut false : AUCUN changement de comportement pour les
+    // autres consommateurs de MKPSpaceV1LD/BoundBrancher (gecode_bab_bucketed.cpp,
+    // gecode_bab_collect.cpp), qui gardent le fusionnement commit()→more()
+    // historique. Mis à true uniquement dans solve_gecode_bab_mkp.
+    bool defer_bound_to_driver = false;
+    // Décomposition du temps de borne en mode GNN, cumulée sur tous les
+    // appels more() : construction de graphe, forward pass GNN "pur", calcul
+    // de L1(λ) (inclut la résolution ζ exacte côté serveur Python), et
+    // overhead IPC (= t_bound_total_s − les trois précédents), qui isole la
+    // latence de communication du temps de calcul réel.
+    mutable double t_gnn_graph_build_s   = 0.0;
+    mutable double t_gnn_graph_features_s = 0.0;  // sous-ensemble de t_gnn_graph_build_s (backend natif)
+    mutable double t_gnn_graph_edges_s    = 0.0;  // sous-ensemble de t_gnn_graph_build_s (backend natif)
+    mutable double t_gnn_forward_s       = 0.0;
+    mutable double t_gnn_bound_compute_s = 0.0;
+    mutable double t_gnn_ipc_overhead_s  = 0.0;
 
     // ── Ordre de branchement (RATIO, calculé une fois à la construction) ──────
     // Items triés par c_k / (Σ_i Σ_j p_i * A_i[j][k] / b_i[j]) décroissant.
@@ -175,6 +328,12 @@ struct MKPSharedData {
           A(std::move(A_)), b(std::move(b_)),
           T_node(T_node_)
     {
+        // Statistiques par profondeur : depth ∈ [0, n]
+        nodes_by_depth.assign(n + 1, 0);
+        ub_tightened_by_depth.assign(n + 1, 0);
+        fails_from_bound_by_depth.assign(n + 1, 0);
+        t_bound_by_depth.assign(n + 1, 0.0);
+
         // Conversion float → int pour la formulation CP
         c_int.resize(n);
         for (int k = 0; k < n; ++k)
@@ -234,9 +393,37 @@ struct GecodeV1LDResult {
     int64_t     ub_tightened;         // sous-ensemble : borne V1LD a réellement réduit obj.max()
     int64_t     depth;                // profondeur maximale atteinte dans l'arbre
     double      root_bound_time_s;    // temps du premier appel à more() (cold start, T_root iters)
+    double      root_bound_value = 0.0; // valeur de la borne au premier appel more() (racine) ; 0.0 en mode REF
     double      t_bound_total_s;      // temps cumulé dans tous les appels more()
     double      t_bab_pure_s;         // temps B&B pur = t_total - t_bound_total
+    int64_t     clone_count = 0;      // nb d'appels à MKPSpaceV1LD::copy() (~1/nœud, parfois plus)
+    double      t_clone_state_s = 0.0; // sous-ensemble de t_bab_pure_s : copie de lambda/b_res/fixed_mask
+    double      t_clone_total_s = 0.0; // sous-ensemble de t_bab_pure_s : clonage complet (base + état)
     std::string status;               // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
+
+    // ── Mode GNN uniquement (0 sinon) — cf. MKPSharedData::t_gnn_*_s ──────────
+    double      t_gnn_graph_build_s   = 0.0;
+    double      t_gnn_graph_features_s = 0.0;
+    double      t_gnn_graph_edges_s    = 0.0;
+    double      t_gnn_forward_s       = 0.0;
+    double      t_gnn_bound_compute_s = 0.0;
+    double      t_gnn_ipc_overhead_s  = 0.0;
+    // Pré-chauffage TorchScript (backend natif uniquement, 0 sinon) : temps
+    // passé à compiler toutes les formes n_g=1..n avant de démarrer le B&B
+    // (cf. commentaire dans solve_gecode_bab_mkp). Inclus dans solve_time_s
+    // (le chrono t0 démarre avant), mais PAS dans t_bab_pure_s ni
+    // t_bound_total_s — sinon il serait attribué à tort au dispatch
+    // brancher/CP.
+    double      t_gnn_warmup_s        = 0.0;
+
+    // ── Statistiques par profondeur — cf. MKPSharedData::*_by_depth ──────────
+    // Taille n+1, index = depth (nombre de x fixés, 0 = racine). Vide en mode
+    // REF. Sert à repérer la depth au-delà de laquelle la borne ne provoque
+    // plus aucun fail (fails_from_bound_by_depth[d] == 0).
+    std::vector<int64_t> nodes_by_depth;
+    std::vector<int64_t> ub_tightened_by_depth;
+    std::vector<int64_t> fails_from_bound_by_depth;
+    std::vector<double>  t_bound_by_depth;  // s cumulées, mêmes index — cf. MKPSharedData::t_bound_by_depth
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -265,6 +452,22 @@ public:
 
     // false → premier appel : cold start (T_root iters) ; true → warm-start (T_node iters)
     bool lambda_warmed = false;
+
+    // ── État résiduel incrémental (évite de reconstruire b_adj depuis data->b
+    // en resommant TOUT fixed_one à chaque nœud — cf. discussion coût more()) ─
+    //
+    // b_res[i][j]   : capacité résiduelle du scénario i, contrainte j, après
+    //                 déduction des items fixés à 1 (hérité/mis à jour par more()).
+    // fixed_mask[k] : 0 = pas encore comptabilisé, 1 = déjà comptabilisé (fixé à
+    //                 0 ou 1) — sert à détecter, à chaque appel, UNIQUEMENT les
+    //                 variables nouvellement fixées depuis le nœud parent (delta,
+    //                 généralement 1, parfois plus si la propagation CP a fixé
+    //                 des variables en plus du branchement explicite).
+    // fp_running    : profit fixé (Σ c[k] pour k fixé à 1), mis à jour au même
+    //                 rythme que b_res au lieu d'être resommé à chaque more().
+    Vec2d                b_res;
+    std::vector<int8_t>  fixed_mask;
+    double               fp_running = 0.0;
 
     // ─────────────────────────────────────────────────────────────────────────
     // BoundBrancher — brancher custom qui déclenche le bornage V1LD
@@ -360,6 +563,14 @@ public:
         // pour calculer la borne V1LD sur le sous-problème résiduel et la poster
         // comme contrainte sur obj. Si cette contrainte est infaisable (borne < LB),
         // Gecode détecte ES_FAILED lors de la propagation suivante.
+        //
+        // SAUF si data->defer_bound_to_driver == true (cf. commentaire sur ce
+        // champ, MKPSharedData) : dans ce cas, on fixe la variable et on
+        // s'arrête là — c'est au driver (boucle DFS) d'appeler more()
+        // lui-même, APRÈS avoir laissé la propagation CP pure (status())
+        // une première chance de faire échouer le nœud sans payer le coût de
+        // la borne. Défaut false : comportement historique inchangé pour les
+        // autres consommateurs (gecode_bab_bucketed.cpp, gecode_bab_collect.cpp).
         ExecStatus commit(Space& home, const Choice& c, unsigned int a) override {
             const PosVal& pv = static_cast<const PosVal&>(c);
             int pos = pv.pos;
@@ -369,9 +580,10 @@ public:
             ExecStatus es = me_failed(vars[pos].eq(home, val))
                             ? ES_FAILED : ES_OK;
 
+            auto& sp = static_cast<MKPSpaceV1LD&>(home);
             // Ne calcule la borne que si la fixation est cohérente avec les contraintes
-            if (es == ES_OK)
-                static_cast<MKPSpaceV1LD&>(home).more();
+            if (es == ES_OK && !sp.data->defer_bound_to_driver)
+                sp.more();
 
             return es;
         }
@@ -403,7 +615,9 @@ public:
           lambda_v1ld (d->bound_mode == BoundMode::V1LD
                        ? Vec2d(d->N, Vec1d(d->n, 0.0)) : Vec2d{}),
           lambda_v1cld(d->bound_mode == BoundMode::V1CLD
-                       ? Vec3d(d->N, Vec2d(d->m, Vec1d(d->n, 0.0))) : Vec3d{})
+                       ? Vec3d(d->N, Vec2d(d->m, Vec1d(d->n, 0.0))) : Vec3d{}),
+          b_res(d->b),                    // racine : aucun item fixé, capacité pleine
+          fixed_mask(d->n, 0)
     {
         int n = d->n, m = d->m, N = d->N;
 
@@ -467,18 +681,43 @@ public:
 
     MKPSpaceV1LD(MKPSpaceV1LD& s)
         : IntMaximizeSpace(s), data(s.data),
-          lambda_v1ld(s.lambda_v1ld),
-          lambda_v1cld(s.lambda_v1cld),
           lambda_warmed(s.lambda_warmed)
     {
         x.update(*this, s.x);
         z.update(*this, s.z);
         obj.update(*this, s.obj);
+
+        // Diagnostic : isoler le temps de copie de NOTRE état (listes
+        // d'initialisation remplacées par des affectations chronométrées dans
+        // le corps — coût identique, juste mesuré séparément du reste du
+        // clonage Gecode natif).
+        using Clock = std::chrono::steady_clock;
+        auto t_clone_start = Clock::now();
+        lambda_v1ld  = s.lambda_v1ld;
+        lambda_v1cld = s.lambda_v1cld;
+        b_res        = s.b_res;
+        fixed_mask   = s.fixed_mask;
+        fp_running   = s.fp_running;
+        data->t_clone_state_s += std::chrono::duration<double>(
+            Clock::now() - t_clone_start).count();
+        data->clone_count++;
     }
 
     // copy() : appelé par Gecode pour cloner cet espace. Doit retourner un nouvel
     // espace construit avec le constructeur de clonage.
-    Space*  copy()  override { return new MKPSpaceV1LD(*this); }
+    // Diagnostic : chronomètre le clonage COMPLET (base IntMaximizeSpace + nos
+    // membres), pour isoler par soustraction ce qui n'est PAS notre état
+    // (t_clone_total_s - t_clone_state_s = clonage natif Gecode des
+    // BoolVarArray/IntVar/propagateurs) du reste de t_bab_pure_s (dispatch
+    // BoundBrancher::choice()/commit() hors more(), propagation CP déclenchée
+    // par le moteur de recherche).
+    Space* copy() override {
+        using Clock = std::chrono::steady_clock;
+        auto t0 = Clock::now();
+        Space* s = new MKPSpaceV1LD(*this);
+        data->t_clone_total_s += std::chrono::duration<double>(Clock::now() - t0).count();
+        return s;
+    }
 
     // cost() : retourne la variable que Gecode doit maximiser.
     // IntMaximizeSpace utilise cette variable pour maintenir la borne inférieure
@@ -507,57 +746,233 @@ public:
     // Note : pas de warm-start ici (lambda_init = {}). Chaque appel repart de λ=0.
     // Conséquence : la borne est moins précise que dans bab_mkp.cpp (qui warm-start),
     // mais l'implémentation est plus simple.
+    //
+    // Retourne true si une contrainte obj ≤ ub_int a réellement été postée
+    // (donc si une repropagation via status() a un intérêt), false sinon —
+    // REF, GNN_ROOT déjà réchauffé, feuille en x, gnn_min_depth_frac non
+    // atteint, ou borne calculée mais qui n'améliore pas obj.max(). Utilisé
+    // par le driver quand data->defer_bound_to_driver == true (cf.
+    // solve_gecode_bab_mkp) pour ne re-status() que si nécessaire ; ignoré
+    // (valeur jetée) quand more() est encore appelé depuis
+    // BoundBrancher::commit() (defer_bound_to_driver == false).
 
-    void more() {
+    bool more() {
+        // Mode REF : squelette V1LD nu — même heuristique de branchement, même
+        // incumbent glouton, même moteur DFS que V1LD/V1CLD, mais AUCUNE
+        // reconstruction de sous-problème et AUCUNE borne calculée/postée.
+        // Court-circuit avant même le scan des variables (Étape 1) : ce scan
+        // et la mise à jour incrémentale de b_res/fp_running n'existent que
+        // pour servir le calcul de borne, donc n'ont pas lieu d'être ici.
+        if (data->bound_mode == BoundMode::REF) {
+            data->more_calls++;
+            return false;
+        }
+
+        // Mode GNN_ROOT : la borne n'est calculée qu'UNE FOIS par lignée (au
+        // premier appel more(), cf. lambda_warmed hérité par clonage — même
+        // notion de "premier appel" que is_first plus bas / T_root vs T_node).
+        // Une fois lambda_warmed==true, on se comporte comme REF : même
+        // court-circuit AVANT le scan des variables (Étape 1), qui n'a
+        // d'utilité que pour alimenter un calcul de borne ultérieur.
+        if (data->bound_mode == BoundMode::GNN_ROOT && lambda_warmed) {
+            data->more_calls++;
+            return false;
+        }
+
         const int n = data->n;
         const int m = data->m;
         const int N = data->N;
 
-        // Étape 1 : identifier l'état courant des variables x
+        // Étape 1 : identifier l'état courant des variables x, ET mettre à jour
+        // l'état résiduel incrémental (b_res, fp_running) pour les SEULES
+        // variables nouvellement fixées depuis le nœud parent (delta — en
+        // général 1 seule, le branchement explicite ; parfois plus si la
+        // propagation CP a fixé des variables en plus). Remplace la
+        // reconstruction complète de b_adj/fp depuis data->b/data->c à chaque
+        // nœud (coût O(N·m·n) auparavant, resommé sur TOUT fixed_one) par un
+        // coût O(N·m·|delta|) — b_res/fixed_mask sont clonés d'un nœud à l'autre
+        // comme lambda_v1ld/lambda_v1cld, donc portent déjà l'état du parent.
+        //
+        // x_mask sert uniquement au mode GNN (0=fixé_0, 1=fixé_1, 2=libre, sur
+        // l'instance COMPLÈTE) — coût O(n) négligeable, on le construit toujours
+        // pour ne pas complexifier cette boucle avec un branchement par mode.
         std::vector<int> free_vars;   // indices des x[k] non encore fixés
-        std::vector<int> fixed_one;   // indices des x[k] fixés à 1
+        std::vector<int8_t> x_mask(n, 2);
         free_vars.reserve(n);
-        fixed_one.reserve(n);
 
         for (int k = 0; k < n; ++k) {
-            if (!x[k].assigned())
+            if (!x[k].assigned()) {
                 free_vars.push_back(k);
-            else if (x[k].val() == 1)
-                fixed_one.push_back(k);
+                continue;
+            }
+            int val = x[k].val();
+            x_mask[k] = static_cast<int8_t>(val);
+
+            if (fixed_mask[k] != 0) continue;  // déjà comptabilisé à un appel antérieur
+            fixed_mask[k] = 1;
+            if (val == 1) {
+                for (int i = 0; i < N; ++i)
+                    for (int j = 0; j < m; ++j)
+                        b_res[i][j] -= data->A[i][j][k];
+                fp_running += data->c[k];
+            }
         }
 
         // Comptabilise cet appel (même les feuilles où on sort tôt)
         data->more_calls++;
 
         // À une feuille (tout fixé), pas de borne à calculer : l'objectif est exact.
-        if (free_vars.empty()) return;
+        if (free_vars.empty()) return false;
 
         const int n_free = static_cast<int>(free_vars.size());
 
-        // Étape 2 : profit des items déjà sélectionnés
-        double fp = 0.0;
-        for (int k : fixed_one) fp += data->c[k];
+        // depth = nombre de variables x déjà fixées (0 = racine). Utilisé pour
+        // la borne GNN (query()) ET pour les statistiques par profondeur
+        // ci-dessous — un seul calcul, une seule définition.
+        const int depth = n - n_free;
+        data->nodes_by_depth[depth]++;
 
-        // Étape 3 : construire le sous-problème réduit (flottant, pour V1LD)
+        // Étape 2 : profit des items déjà sélectionnés — maintenu incrémentalement
+        // dans fp_running (étape 1) ; plus besoin de resommer fixed_one ici.
+        double fp = fp_running;
+
+        // ── Mode GNN / GNN_ROOT : borne one-shot, AVANT de construire le
+        // sous-problème réduit (Étape 3) — celui-ci ne sert qu'aux modes
+        // V1LD/V1CLD, le construire quand même ici gaspillerait
+        // O(N·m·n_free) par nœud pour rien. Un seul aller-retour vers le
+        // serveur Python persistant (data->gnn_client), pas de warm-start ni
+        // de raffinement itératif : la borne prédite est postée telle
+        // quelle. x_mask porte sur l'instance complète — le serveur
+        // reconstruit lui-même le sous-problème résiduel depuis ce masque
+        // (cf. build_graph côté Python, qui accepte un masque plutôt qu'un
+        // rétrécissement).
+        // En GNN_ROOT, ce bloc n'est atteint que lorsque lambda_warmed était
+        // encore false (garanti par le court-circuit ci-dessus) : c'est donc
+        // toujours le premier (et dernier) appel de la lignée.
+        // Mode GNN uniquement : sous le seuil de profondeur relative, on saute
+        // l'appel GNN pour ce nœud (cf. doc sur MKPSharedData::gnn_min_depth_frac
+        // — les mesures existantes montrent que la borne n'y provoque
+        // pratiquement jamais de fail immédiat). nodes_by_depth est déjà
+        // comptabilisé ci-dessus ; aucune borne n'est calculée/postée ici, donc
+        // ni t_bound_by_depth ni ub_tightened_by_depth ne bougent pour cette depth.
+        if (data->bound_mode == BoundMode::GNN &&
+            depth < static_cast<int>(std::ceil(data->gnn_min_depth_frac * n))) {
+            return false;
+        }
+
+        // Symétrique : sous mode GNN, au-delà du seuil gnn_max_depth_frac, on
+        // arrête de calculer/poster la borne (cf. doc sur
+        // MKPSharedData::gnn_max_depth_frac ci-dessus). Même comptabilisation
+        // que le seuil min (nodes_by_depth déjà incrémenté, aucune borne
+        // calculée ici).
+        if (data->bound_mode == BoundMode::GNN &&
+            depth > static_cast<int>(std::floor(data->gnn_max_depth_frac * n))) {
+            return false;
+        }
+
+        // Mode GNN uniquement : proxy local gap_rel = (obj.max()-obj.min())/obj.max(),
+        // disponible sans coût (obj déjà propagé par le CP hérité des ancêtres,
+        // avant tout calcul de borne à CE nœud). Si le domaine est encore trop
+        // large, on saute l'appel GNN — cf. doc sur MKPSharedData::gnn_min_gap_frac.
+        if (data->bound_mode == BoundMode::GNN && data->gnn_min_gap_frac > 0.0) {
+            const double gap_rel = static_cast<double>(obj.max() - obj.min()) /
+                                    static_cast<double>(obj.max());
+            if (gap_rel > data->gnn_min_gap_frac) {
+                return false;
+            }
+        }
+
+        if (data->bound_mode == BoundMode::GNN || data->bound_mode == BoundMode::GNN_ROOT) {
+            using Clock = std::chrono::steady_clock;
+            auto t_bound_start = Clock::now();
+            const bool is_first = !lambda_warmed;
+
+            GNNCallTiming timing;
+            // b_res (this->b_res) est déjà à jour à ce point (maintenu
+            // incrémentalement à l'Étape 1 ci-dessus) — le transmettre
+            // directement au backend au lieu de le laisser recalculer depuis
+            // x_mask (cf. revue niveau 1 point B : coût O(N·m·|F1|) redondant,
+            // croissant avec la profondeur, qui expliquait pourquoi le coût
+            // par nœud du mode GNN ne décroissait pas avec la profondeur
+            // contrairement à V1LD/V1CLD).
+            double ub_relative = data->gnn_client->query(x_mask, b_res, fp, /*depth=*/depth, timing);
+            double ub = fp + ub_relative;
+
+            // Debug : trace nœud par nœud (diagnostic bug faux-optimal batché,
+            // cf. mémoire "gnn_batched_robustness_sweep_result") — opt-in via
+            // GNN_TRACE_DEBUG, aucun coût si absent. Format CSV parseable :
+            // TRACE,<x_mask complet>,<depth>,<fp>,<ub_relative>,<ub>,<obj_min>,<obj_max>
+            // obj_min/obj_max : domaine (unités SCALE) juste APRÈS l'appel GNN
+            // mais AVANT le rel(obj <= ub_int) ci-dessous — reflète donc l'état
+            // obtenu par la seule propagation CP héritée des ancêtres, utilisé
+            // pour tester un proxy local (gap = obj_max - obj_min) candidat à
+            // décider si l'appel GNN vaut le coût (cf. mémoire "gnn_local_proxy_gate").
+            if (std::getenv("GNN_TRACE_DEBUG")) {
+                std::string mstr; mstr.reserve(n);
+                for (int k = 0; k < n; ++k) mstr += static_cast<char>('0' + x_mask[k]);
+                std::fprintf(stderr, "TRACE,%s,%d,%.6f,%.6f,%.6f,%d,%d\n",
+                             mstr.c_str(), depth, fp, ub_relative, ub, obj.min(), obj.max());
+            }
+
+            data->t_gnn_graph_build_s   += timing.t_graph_build_s;
+            data->t_gnn_graph_features_s += timing.t_graph_features_s;
+            data->t_gnn_graph_edges_s    += timing.t_graph_edges_s;
+            data->t_gnn_forward_s       += timing.t_forward_s;
+            data->t_gnn_bound_compute_s += timing.t_bound_compute_s;
+
+            double elapsed_bound = std::chrono::duration<double>(
+                Clock::now() - t_bound_start).count();
+            data->t_gnn_ipc_overhead_s += elapsed_bound -
+                (timing.t_graph_build_s + timing.t_forward_s + timing.t_bound_compute_s);
+
+            data->t_bound_total_s += elapsed_bound;
+            data->t_bound_by_depth[depth] += elapsed_bound;
+            if (is_first) { data->root_bound_time_s = elapsed_bound; data->root_bound_value = ub; }
+            lambda_warmed = true;
+
+            if (ub > data->best_open_ub) data->best_open_ub = ub;
+            int ub_int = static_cast<int>(std::ceil(ub * data->SCALE));
+            const bool posted = ub_int < obj.max();
+            if (posted) {
+                data->ub_tightened++;
+                data->ub_tightened_by_depth[depth]++;
+                if (ub_int < obj.min()) {
+                    data->fails_from_bound++;
+                    data->fails_from_bound_by_depth[depth]++;
+                }
+                rel(*this, obj <= ub_int);
+            }
+            return posted;
+        }
+
+        // Étape 3 : construire le sous-problème réduit (flottant, pour V1LD/V1CLD).
+        // Chrono démarré ICI (avant la reconstruction O(N·m·n_free) de A_free/b_adj),
+        // pas seulement autour de solve_v1ld/solve_v1cld : cette reconstruction est un
+        // coût du calcul de la borne (l'équivalent existe côté GNN, dans build_graph
+        // sur le serveur Python, et EST compté dans t_gnn_graph_build_s) — l'ancien
+        // placement du chrono (juste avant l'étape 4) la comptait à tort dans
+        // t_bab_pure_s, gonflant artificiellement le "B&B pur" de V1LD/V1CLD par
+        // rapport au mode GNN.
+        using Clock = std::chrono::steady_clock;
+        auto t_bound_start = Clock::now();
+
         Vec1d c_free(n_free);
         for (int kf = 0; kf < n_free; ++kf)
             c_free[kf] = data->c[free_vars[kf]];
 
+        // Sous-matrice A restreinte aux variables libres — reste O(N·m·n_free) :
+        // pas encore résolu par l'incrément 1 (nécessiterait de passer un accès
+        // indexé à solve_v1ld/solve_v1cld plutôt qu'un tableau pré-empaqueté ;
+        // laissé pour un incrément séparé si le gain ci-dessous ne suffit pas).
         Vec3d A_free(N, Vec2d(m, Vec1d(n_free, 0.0)));
-        Vec2d b_adj(N, Vec1d(m, 0.0));
-
-        for (int i = 0; i < N; ++i) {
-            for (int j = 0; j < m; ++j) {
-                // Capacité consommée par les items déjà pris
-                double consumed = 0.0;
-                for (int k : fixed_one) consumed += data->A[i][j][k];
-                b_adj[i][j] = data->b[i][j] - consumed;
-
-                // Sous-matrice A restreinte aux variables libres
+        for (int i = 0; i < N; ++i)
+            for (int j = 0; j < m; ++j)
                 for (int kf = 0; kf < n_free; ++kf)
                     A_free[i][j][kf] = data->A[i][j][free_vars[kf]];
-            }
-        }
+
+        // b_adj == b_res : déjà à jour depuis l'étape 1 (mise à jour incrémentale),
+        // plus de reconstruction depuis data->b + somme sur fixed_one ici.
+        const Vec2d& b_adj = b_res;
 
         // Étape 4 : warm-start — projeter λ du nœud courant sur les variables libres.
         // lambda_warmed == false → λ hérité est nul (cold start) → T_root itérations.
@@ -580,9 +995,6 @@ public:
             node_tol  = data->rel_tol;
         }
 
-        using Clock = std::chrono::steady_clock;
-        auto t_bound_start = Clock::now();
-
         double ub;  // borne supérieure retournée par le solveur Lagrangien choisi
 
         if (data->bound_mode == BoundMode::V1LD) {
@@ -593,8 +1005,16 @@ public:
                     for (int kf = 0; kf < n_free; ++kf)
                         lambda_init[i][kf] = lambda_v1ld[i][free_vars[kf]];
 
-            MKPProblemBnB prob(c_free, data->p, A_free, b_adj, data->epsilon);
-            V1LDResult res = solve_v1ld(prob, T_iters, 0, false, -1.0,
+            // Choix de la méthode ζ_i, cf. doc sur MKPSharedData::use_surrogate_zeta.
+            // solve_v1ld() dispatche via V1LDProblem& (virtuel) : polymorphisme
+            // requis pour choisir le type concret à l'exécution sans dupliquer
+            // l'appel solve_v1ld ci-dessous.
+            std::unique_ptr<MKPProblem> prob_ptr = data->use_surrogate_zeta
+                ? std::unique_ptr<MKPProblem>(std::make_unique<MKPProblemBnBSurrogate>(
+                      c_free, data->p, A_free, b_adj, data->epsilon))
+                : std::unique_ptr<MKPProblem>(std::make_unique<MKPProblemBnB>(
+                      c_free, data->p, A_free, b_adj, data->epsilon));
+            V1LDResult res = solve_v1ld(*prob_ptr, T_iters, 0, false, -1.0,
                                         node_tol, data->tol_window, -1e18,
                                         lambda_init);
 
@@ -627,8 +1047,11 @@ public:
         double elapsed_bound = std::chrono::duration<double>(
             Clock::now() - t_bound_start).count();
         data->t_bound_total_s += elapsed_bound;
-        if (is_first)
+        data->t_bound_by_depth[depth] += elapsed_bound;
+        if (is_first) {
             data->root_bound_time_s = elapsed_bound;
+            data->root_bound_value  = ub;
+        }
 
         lambda_warmed = true;
         if (ub > data->best_open_ub) data->best_open_ub = ub;  // mise à jour de la meilleure UB vue
@@ -636,17 +1059,22 @@ public:
 
         // La borne est utile uniquement si elle réduit le domaine courant de obj.
         // obj.max() est la valeur maximale encore atteignable selon Gecode.
-        if (ub_int < obj.max()) {
+        const bool posted = ub_int < obj.max();
+        if (posted) {
             data->ub_tightened++;
+            data->ub_tightened_by_depth[depth]++;
 
             // Si ub_int est déjà en dessous du minimum de obj, la contradiction est
             // immédiate : ce fail vient directement de notre borne, pas de la propagation CP.
-            if (ub_int < obj.min())
+            if (ub_int < obj.min()) {
                 data->fails_from_bound++;
+                data->fails_from_bound_by_depth[depth]++;
+            }
 
             rel(*this, obj <= ub_int);
         }
         // Si ub_int >= obj.max(), la borne ne change rien : on ne la poste pas.
+        return posted;
     }
 };
 
@@ -679,6 +1107,30 @@ std::pair<double, std::vector<int8_t>> greedy_mkp(
 //   time_lim  : limite de temps en secondes (-1 = illimité)
 //   T_node    : itérations de sous-gradient V1LD par nœud (défaut 30)
 
+// gnn_checkpoint_path : requis si bound_mode == BoundMode::GNN (chemin vers le
+//   .pt) — lève std::invalid_argument si vide dans ce mode.
+// gnn_backend : "ipc" (défaut, GNNV1LDClient — process Python persistant,
+//   gnn/gnn_inference_server.py) ou "native" (GNNV1LDNative — build_graph +
+//   forward + lagrangian_v1ld réimplémentés en C++/LibTorch, en-process,
+//   cf. gnn_v1ld_native.hpp). Même checkpoint, mêmes résultats (validés à
+//   ~1e-4 près) — "native" élimine l'IPC par nœud au prix d'un chargement
+//   ponctuel du modèle (fork python one-shot, mis en cache) au démarrage.
+// gnn_python_exe / gnn_server_script : ignorés en mode "native" ; permettent
+//   sinon de pointer vers un interpréteur (venv) et un serveur différents
+//   sans recompiler.
+// gnn_min_depth_frac : mode GNN uniquement (ignoré ailleurs, y compris
+//   GNN_ROOT) — saute l'appel GNN tant que depth/n < gnn_min_depth_frac (cf.
+//   doc sur MKPSharedData::gnn_min_depth_frac dans gecode_bab.hpp). Défaut
+//   0.0 = borne calculée à chaque nœud dès la racine (comportement historique).
+// gnn_min_gap_frac : mode GNN uniquement — saute l'appel GNN si le proxy local
+//   gap_rel = (obj.max()-obj.min())/obj.max() dépasse ce seuil (cf. doc sur
+//   MKPSharedData::gnn_min_gap_frac). Défaut 0.0 = jamais sauté.
+// gnn_max_depth_frac : symétrique de gnn_min_depth_frac — saute l'appel GNN
+//   dès que depth/n > gnn_max_depth_frac (cf. doc sur
+//   MKPSharedData::gnn_max_depth_frac). Défaut 1.0 = jamais sauté.
+// use_surrogate_zeta : mode V1LD uniquement — cf. doc sur
+//   MKPSharedData::use_surrogate_zeta. Défaut false = comportement historique
+//   (MKPProblemBnB).
 GecodeV1LDResult solve_gecode_bab_mkp(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
@@ -688,4 +1140,14 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     int       T_node        = 30,
     BoundMode bound_mode    = BoundMode::V1LD,
     bool      patience_mode = false,
-    double    patience_tol  = 0.1);
+    double    patience_tol  = 0.1,
+    std::string gnn_checkpoint_path = "",
+    std::string gnn_python_exe      = "python3",
+    std::string gnn_device          = "cpu",
+    std::string gnn_server_script   = "gnn/gnn_inference_server.py",
+    std::string gnn_backend         = "ipc",
+    std::string gnn_variant         = "homogene",
+    double gnn_min_depth_frac       = 0.0,
+    double gnn_min_gap_frac         = 0.0,
+    double gnn_max_depth_frac       = 1.0,
+    bool   use_surrogate_zeta       = false);

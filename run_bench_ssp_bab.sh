@@ -16,7 +16,7 @@
 
 # ── Ressources SLURM ──────────────────────────────────────────────────────────
 #SBATCH --account=def-qcappart
-#SBATCH --chdir=/home/romanlen/projects/def-qcappart/romanl/Learning_bounds_CCCP
+#SBATCH --chdir=/project/6062881/romanlen/Learning_bounds_CCCP
 #SBATCH --job-name=bench_ssp_bab
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G

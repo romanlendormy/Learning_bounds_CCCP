@@ -3,11 +3,17 @@
  */
 
 #include "gecode_bab.hpp"
+#include "gnn_v1ld_client.hpp"
+#include "gnn_v1ld_native.hpp"
+#include "gnn_sd_edit_native.hpp"
+#include "gnn_sd_edit_native_aoti.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <memory>
 #include <numeric>
+#include <stdexcept>
 #include <vector>
 #include <tuple>
 
@@ -76,7 +82,17 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     int       T_node,
     BoundMode bound_mode,
     bool      patience_mode,
-    double    patience_tol)
+    double    patience_tol,
+    std::string gnn_checkpoint_path,
+    std::string gnn_python_exe,
+    std::string gnn_device,
+    std::string gnn_server_script,
+    std::string gnn_backend,
+    std::string gnn_variant,
+    double gnn_min_depth_frac,
+    double gnn_min_gap_frac,
+    double gnn_max_depth_frac,
+    bool   use_surrogate_zeta)
 {
     using Clock = std::chrono::steady_clock;
     auto t0 = Clock::now();
@@ -95,6 +111,101 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     shared.patience_mode  = patience_mode;
     shared.patience_tol   = patience_tol;
     shared.initial_lb_int = greedy_int;   // fournit l'incumbent à l'espace racine
+    shared.gnn_min_depth_frac = gnn_min_depth_frac;
+    shared.gnn_min_gap_frac   = gnn_min_gap_frac;
+    shared.gnn_max_depth_frac = gnn_max_depth_frac;
+    shared.use_surrogate_zeta = use_surrogate_zeta;
+    // Découple more() de BoundBrancher::commit() (cf. revue niveau 1 point A) :
+    // la boucle DFS ci-dessous appelle explicitement more() APRÈS un premier
+    // status() de propagation CP pure, pour ne payer le coût de la borne
+    // (V1LD/V1CLD/GNN) que sur les nœuds que le CP seul n'a pas déjà tués.
+    shared.defer_bound_to_driver = true;
+
+    // ── 2bis. Mode GNN : backend IPC (process Python persistant) ou natif
+    // (LibTorch en-process) — cf. gnn_backend, doc sur solve_gecode_bab_mkp.
+    // Possédé localement (unique_ptr) — shared.gnn_client n'est qu'un pointeur
+    // non-propriétaire, valide tant que ce unique_ptr vit (toute la durée de
+    // la résolution, cf. commentaire sur MKPSharedData::gnn_client).
+    std::unique_ptr<GNNBoundBackend> gnn_client;
+    double t_gnn_warmup_s = 0.0;
+    if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT) {
+        if (gnn_checkpoint_path.empty())
+            throw std::invalid_argument(
+                "solve_gecode_bab_mkp : bound_mode=GNN/GNN_ROOT requiert gnn_checkpoint_path");
+        if (gnn_backend == "native" || gnn_backend == "native_aoti") {
+            // build_graph_cpp() est réimplémenté séparément pour chaque
+            // topologie de graphe : GNNV1LDNative (gnn_v1ld_native.cpp,
+            // gnn_variant="homogene", clique scénario-scénario) et
+            // GNNSdEditNative (gnn_sd_edit_native.cpp, gnn_variant="sd_edit",
+            // étoile ancrée au scénario 0 — cf. mémoire "portage backend natif
+            // sd_edit"). Échec explicite pour toute autre valeur plutôt qu'une
+            // borne calculée silencieusement sur la mauvaise topologie de graphe.
+            //
+            // gnn_backend=native_aoti : backend AOTInductor (au lieu de
+            // TorchScript), gain wall-clock ×1.77-1.79 mesuré sur le forward
+            // seul (cf. mémoire "aoti-sdedit-wallclock-result") — sd_edit
+            // uniquement pour l'instant (homogène non porté).
+            if (gnn_backend == "native_aoti" && gnn_variant != "sd_edit")
+                throw std::invalid_argument(
+                    "solve_gecode_bab_mkp : gnn_backend=native_aoti ne supporte que "
+                    "gnn_variant=sd_edit pour l'instant (homogène non porté)");
+
+            if (gnn_backend == "native_aoti")
+                gnn_client = std::make_unique<GNNSdEditNativeAOTI>(
+                    gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b);
+            else if (gnn_variant == "homogene")
+                gnn_client = std::make_unique<GNNV1LDNative>(
+                    gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b);
+            else if (gnn_variant == "sd_edit")
+                gnn_client = std::make_unique<GNNSdEditNative>(
+                    gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b);
+            else
+                throw std::invalid_argument(
+                    "solve_gecode_bab_mkp : gnn_backend=native ne supporte que "
+                    "gnn_variant=homogene|sd_edit (variante \"" + gnn_variant +
+                    "\" non portée en C++) — utiliser gnn_backend=ipc");
+
+            // Pré-chauffage TorchScript (identique pour les deux variantes —
+            // même mécanisme JIT "profiling", indépendant de la topologie du
+            // graphe) : l'executor JIT (mode "profiling")
+            // recompile une fois PAR FORME distincte de tenseur d'entrée
+            // (n_g = nb d'items encore libres, qui décroît avec la profondeur
+            // du B&B), puis met le plan compilé en cache indéfiniment — mesuré
+            // ~2026-07-11 (cf. mémoire projet
+            // "gnn_inference_forward_cost_benchmark") : jusqu'à ~0.3s pour la
+            // première rencontre de n_g=20, quasi gratuit ensuite. Sans ce
+            // pré-chauffage, chaque profondeur inédite paie cette taxe une
+            // fois pendant la recherche chronométrée — ici on la paie une
+            // seule fois par valeur de n_g, avant de commencer, pour que le
+            // reste de la recherche ne voie que le régime stable.
+            {
+                auto t_warm0 = Clock::now();
+                std::vector<int8_t> warm_mask(n, 0);
+                for (int n_g = 1; n_g <= n; ++n_g) {
+                    for (int k = 0; k < n_g; ++k) warm_mask[k] = 2;
+                    for (int k = n_g; k < n; ++k) warm_mask[k] = 0;
+                    GNNCallTiming warm_timing;
+                    // warm_mask ne fixe jamais rien à 1 (seulement 0/libre) :
+                    // b_res == b (capacité pleine) est donc correct ici, pas
+                    // besoin de le recalculer pour ce simple pré-chauffage de
+                    // formes.
+                    for (int rep = 0; rep < 2; ++rep)
+                        gnn_client->query(warm_mask, b, /*curr_cost=*/0.0,
+                                          /*depth=*/n - n_g, warm_timing);
+                }
+                t_gnn_warmup_s = std::chrono::duration<double>(Clock::now() - t_warm0).count();
+            }
+        } else if (gnn_backend == "ipc") {
+            gnn_client = std::make_unique<GNNV1LDClient>(
+                gnn_python_exe, gnn_server_script, gnn_checkpoint_path, gnn_device,
+                n, m, N, epsilon, c, p, A, b, gnn_variant);
+        } else {
+            throw std::invalid_argument(
+                "solve_gecode_bab_mkp : gnn_backend inconnu (\"" + gnn_backend +
+                "\"), attendu \"ipc\", \"native\" ou \"native_aoti\"");
+        }
+        shared.gnn_client = gnn_client.get();
+    }
 
     // ── 2. DFS B&B avec Gecode Spaces ────────────────────────────────────────
     // On gère nous-mêmes la pile DFS (LIFO) en utilisant l'API publique de
@@ -169,10 +280,30 @@ GecodeV1LDResult solve_gecode_bab_mkp(
 
         for (int a = 0; a < 2; ++a) {
             MKPSpaceV1LD* child = static_cast<MKPSpaceV1LD*>(space->clone());
-            child->commit(*c, a);        // commit → more() → obj ≤ ub_int
-            SpaceStatus cst = child->status();  // propage, y compris obj ≤ ub_int
+            child->commit(*c, a);                // fixation seule (defer_bound_to_driver=true,
+                                                   // cf. BoundBrancher::commit()) — more() n'est
+                                                   // PAS appelé ici
+            SpaceStatus cst = child->status();    // propagation CP pure : capacités réifiées,
+                                                   // chance constraint — pas encore de borne
 
             if (cst == SS_FAILED) { ++fails; delete child; continue; }
+
+            // Borne (V1LD/V1CLD/GNN) calculée seulement APRÈS que la
+            // propagation CP native ait eu sa chance de tuer le nœud
+            // gratuitement — cf. revue niveau 1 point A : dans l'ancien
+            // ordre (borne postée depuis commit(), avant tout status()), le
+            // coût GNN complet était payé même sur les nœuds que fails_from_cp
+            // montre déjà tués par le CP seul, indépendamment de la borne.
+            // depth < n : encore en phase de branchement sur x (more() ne
+            // fait rien lors du branchement sur z qui suit, cf. more()) —
+            // more() retourne false si aucune contrainte n'a été postée
+            // (REF, GNN_ROOT déjà réchauffé, gnn_min_depth_frac non atteint,
+            // ou borne qui n'améliore pas obj.max()), auquel cas le second
+            // status() serait pur gaspillage et est sauté.
+            if (depth < n && child->more()) {
+                cst = child->status();            // repropage la borne fraîchement postée
+                if (cst == SS_FAILED) { ++fails; delete child; continue; }
+            }
 
             double cub = child->obj.max() / (double)MKPSharedData::SCALE;
             if (cub <= best_val + 1e-6) { ++fails; delete child; continue; }
@@ -217,8 +348,23 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     res.more_calls       = static_cast<int64_t>(shared.more_calls);
     res.ub_tightened       = static_cast<int64_t>(shared.ub_tightened);
     res.root_bound_time_s  = shared.root_bound_time_s;
+    res.root_bound_value   = shared.root_bound_value;
     res.t_bound_total_s    = shared.t_bound_total_s;
-    res.t_bab_pure_s       = res.solve_time_s - shared.t_bound_total_s;
+    res.t_gnn_warmup_s     = t_gnn_warmup_s;
+    res.t_bab_pure_s       = res.solve_time_s - shared.t_bound_total_s - t_gnn_warmup_s;
+    res.clone_count        = shared.clone_count;
+    res.t_clone_state_s    = shared.t_clone_state_s;
+    res.t_clone_total_s    = shared.t_clone_total_s;
+    res.t_gnn_graph_build_s   = shared.t_gnn_graph_build_s;
+    res.t_gnn_graph_features_s = shared.t_gnn_graph_features_s;
+    res.t_gnn_graph_edges_s    = shared.t_gnn_graph_edges_s;
+    res.t_gnn_forward_s       = shared.t_gnn_forward_s;
+    res.t_gnn_bound_compute_s = shared.t_gnn_bound_compute_s;
+    res.t_gnn_ipc_overhead_s  = shared.t_gnn_ipc_overhead_s;
+    res.nodes_by_depth             = shared.nodes_by_depth;
+    res.ub_tightened_by_depth      = shared.ub_tightened_by_depth;
+    res.fails_from_bound_by_depth  = shared.fails_from_bound_by_depth;
+    res.t_bound_by_depth           = shared.t_bound_by_depth;
 
     if (best) {
         // Dé-scaler l'objectif : best->obj.val() est en unités SCALE

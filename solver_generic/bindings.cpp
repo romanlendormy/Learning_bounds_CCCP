@@ -29,6 +29,8 @@
 #include "mkp_problem_bnb.hpp"
 #include "mkp_cld_problem.hpp"
 #include "mkp_cld_problem_dp.hpp"
+#include "kp_problem.hpp"
+#include "kp_problem_dp.hpp"
 #include "ssp_problem.hpp"
 #include "ssp_cld_problem.hpp"
 
@@ -255,6 +257,62 @@ Args:
             return new MKPCLDProblemDP(
                 to_vec1d(c_arr), to_vec1d(p_arr),
                 to_vec3d(A_arr), to_vec2d(b_arr),
+                epsilon
+            );
+        }),
+        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
+        py::arg("epsilon"));
+
+    // ── KPProblem (ζ par B&B 1D, réel — défaut) ──────────────────────────────
+    py::class_<KPProblem, V1LDProblem>(m, "KPProblem",
+        R"doc(
+Problème v1LD pour le knapsack chance-contraint (CC-KP, cas m=1 du MKP).
+
+solve_theta : glouton O(n).
+solve_zeta  : knapsack 0/1 exact 1-contrainte par B&B (borne de Dantzig),
+              poids/capacité réels — aucun arrondi entier.
+
+Args:
+    c       : (n,)   coûts déterministes
+    p       : (N,)   probabilités des scénarios
+    A       : (N, n) coefficients de la contrainte stochastique par scénario
+    b       : (N,)   capacité par scénario
+    epsilon : niveau de risque ε
+)doc")
+        .def(py::init([](
+            py::array_t<double> c_arr,
+            py::array_t<double> p_arr,
+            py::array_t<double> A_arr,
+            py::array_t<double> b_arr,
+            double epsilon)
+        {
+            return new KPProblem(
+                to_vec1d(c_arr), to_vec1d(p_arr),
+                to_vec2d(A_arr), to_vec1d(b_arr),
+                epsilon
+            );
+        }),
+        py::arg("c"), py::arg("p"), py::arg("A"), py::arg("b"),
+        py::arg("epsilon"));
+
+    // ── KPProblemDP (ζ par DP O(n×B), arrondi — variante opt-in) ─────────────
+    py::class_<KPProblemDP, KPProblem>(m, "KPProblemDP",
+        R"doc(
+Variante DP de KPProblem — solve_zeta par DP O(n × B) au lieu du B&B.
+Poids/capacité arrondis à l'entier le plus proche : ζ approché si les
+données ne sont pas (proches d')entières — à valider par benchmark avant
+de préférer cette variante au B&B par défaut. Même interface que KPProblem.
+)doc")
+        .def(py::init([](
+            py::array_t<double> c_arr,
+            py::array_t<double> p_arr,
+            py::array_t<double> A_arr,
+            py::array_t<double> b_arr,
+            double epsilon)
+        {
+            return new KPProblemDP(
+                to_vec1d(c_arr), to_vec1d(p_arr),
+                to_vec2d(A_arr), to_vec1d(b_arr),
                 epsilon
             );
         }),

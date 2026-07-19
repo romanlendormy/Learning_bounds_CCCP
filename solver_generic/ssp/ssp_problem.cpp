@@ -153,22 +153,16 @@ SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row
         }
     }
 
-    // Fallback : aucun chemin de longueur T trouvé (DFA vide pour ce T)
-    // Renvoie une séquence greedy per-période (ignore l'automate) pour éviter −∞.
+    // Aucun état acceptant atteint : ce masque (mask_row) n'admet AUCUNE
+    // séquence valide de longueur T_ pour cet employé — sous-problème
+    // réellement infaisable (pas juste "difficile"). Renvoyer NEG_INF
+    // (plutôt qu'ignorer l'automate/le masque comme avant) : toute autre
+    // valeur romprait l'exactitude requise par la borne v1LD, cf.
+    // debug_verify_oracle. Le vecteur d'actions reste de taille T_ (valeurs
+    // arbitraires, jamais consommées puisque la valeur -inf exclut cet
+    // employé de toute sélection gloutonne en aval).
     if (best_q < 0) {
-        std::vector<int> actions(T_);
-        double val = 0.0;
-        for (int t = 0; t < T_; ++t) {
-            int    best_sigma = 0;
-            double best_c     = cost[base + t * SSP_SIGMA_SIZE];
-            for (int s = 1; s < SSP_SIGMA_SIZE; ++s) {
-                double cv = cost[base + t * SSP_SIGMA_SIZE + s];
-                if (cv > best_c) { best_c = cv; best_sigma = s; }
-            }
-            actions[t] = best_sigma;
-            val += best_c;
-        }
-        return {val, std::move(actions)};
+        return {NEG_INF, std::vector<int>(T_, 0)};
     }
 
     // Reconstruction par remontée du backtracking

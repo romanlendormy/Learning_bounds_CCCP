@@ -41,13 +41,19 @@ data/ssp
 data/ssp_collect/
 data/ssp_generate/
 data/train_base/
+data/train_base_s10/
 data/train_base_s30/
+data/train_kp_base_s10/
+data/train_ssp_base_s10/
 data/train_N*/
+data/overfit_holdout/
+data/overfit_holdout_N500/
+data/overfit_holdout_N1000/
 
 GNN_swann_darius
 
-solver_generic/build_cc/
-solver_bab/build/
+solver_generic/build*/
+solver_bab/build*/
 
 logs/
 
@@ -63,6 +69,8 @@ gnn/*.png
 
 # Checkpoints GNN (volumineux, recréables via les scripts d'entraînement)
 gnn/runs/
+gnn_sd_edit/runs/
+gnn_ssp/runs/
 
 # Résultats de benchmark (recréables via les scripts run_bench_*)
 solver_generic/bench_ssp*.csv

@@ -9,6 +9,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew" "/usr/local")
 find_package(ortools CONFIG REQUIRED)
 
+# ── OpenMP (parallélisation de la boucle sur les N scénarios dans v1ld_solver.cpp) ──
+find_package(OpenMP REQUIRED)
+
 # ── Python (chemins par défaut macOS ; surchargeable via -D sur autre plateforme) ──
 if(NOT DEFINED PYTHON_EXECUTABLE)
     set(PYTHON_EXECUTABLE
@@ -37,8 +40,12 @@ add_library(v1ld_generic_core STATIC
     v1cld_solver.cpp
     mkp/mkp_problem.cpp
     mkp/mkp_problem_bnb.cpp
+    mkp/mkp_problem_bnb_surrogate.cpp
+    mkp/mkp_problem_bnb_lp.cpp
     mkp/mkp_cld_problem.cpp
     mkp/mkp_cld_problem_dp.cpp
+    kp/kp_problem.cpp
+    kp/kp_problem_dp.cpp
     ssp/ssp_problem.cpp
     ssp/ssp_cld_problem.cpp
     ssp/ssp_cld2_problem.cpp
@@ -49,6 +56,7 @@ add_library(v1ld_generic_core STATIC
 target_include_directories(v1ld_generic_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kp
     ${CMAKE_CURRENT_SOURCE_DIR}/ssp
     ${CMAKE_CURRENT_SOURCE_DIR}/covset
 )
@@ -57,6 +65,10 @@ target_include_directories(v1ld_generic_core PUBLIC
 add_executable(test_ssp_shift ssp/test_ssp.cpp)
 target_link_libraries(test_ssp_shift PRIVATE v1ld_generic_core)
 target_compile_options(test_ssp_shift PRIVATE -O2)
+
+add_executable(test_kp kp/test_kp.cpp)
+target_link_libraries(test_kp PRIVATE v1ld_generic_core)
+target_compile_options(test_kp PRIVATE -O2)
 
 add_executable(test_ssp_bnb ssp/test_ssp_bnb.cpp)
 target_link_libraries(test_ssp_bnb PRIVATE v1ld_generic_core)
@@ -75,7 +87,7 @@ target_link_libraries(bench_ssp_v1cld2 PRIVATE v1ld_generic_core)
 target_compile_options(bench_ssp_v1cld2 PRIVATE -O3 -march=native)
 
 target_compile_options(v1ld_generic_core PRIVATE -O3 -march=native)
-target_link_libraries(v1ld_generic_core PUBLIC ortools::ortools)
+target_link_libraries(v1ld_generic_core PUBLIC ortools::ortools OpenMP::OpenMP_CXX)
 
 # ── Gecode (pour bench_ssp : optimal exact via BAB sans borne) ────────────────
 set(GECODE_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/../external/gecode"

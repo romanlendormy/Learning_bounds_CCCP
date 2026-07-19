@@ -83,7 +83,7 @@ V1LDResult solve_v1ld(
     Vec1d Lambda_sum(d);
     Vec1d theta_vals(N), delta_vals(N);
     Vec2d x_theta(N, Vec1d(d)), x_zeta(N, Vec1d(d));
-    Vec1d x_bar(d), cost_i(d);
+    Vec1d x_bar(d);
     Vec1d y_star(N);
 
     for (int t = 0; t < T; ++t) {
@@ -95,7 +95,12 @@ V1LDResult solve_v1ld(
                 Lambda_sum[k] += lam[i][k];
 
         // ── (B) θ_i et ζ_i ──────────────────────────────────────────────────
+        // Indépendant par scénario i : parallélisable. cost_i est déclaré DANS
+        // la boucle (une instance par itération, pas de buffer partagé) pour
+        // rester correct sous #pragma omp parallel for.
+        #pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < N; ++i) {
+            Vec1d cost_i(d);
             for (int k = 0; k < d; ++k)
                 cost_i[k] = c[k] + lam[i][k]/p[i] - Lambda_sum[k];
 

@@ -7,7 +7,7 @@ Par rapport à train_full_v1ld_multi :
   - Multi-N pour n=10  : charge N=50/100/200/500 (train_N{N}/ + train_base_s30)
   - Warmup supervisé   : L2 sur λ* sous-gradient, sur les racines train seulement
   - depth_w0           : poids multiplicatif sur la loss des nœuds depth=0
-  - Architecture v21   : FiLM, theta_attn, max_pool (flags optionnels)
+  - Architecture v21   : max_pool (flag optionnel)
   - lr_T0              : CosineAnnealingWarmRestarts (0 = standard CosineAnnealingLR)
   - Eval par depth     : gap par profondeur en plus du gap par n
 
@@ -37,9 +37,10 @@ REPO_ROOT  = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from gnn.train_gnn_v1ld import (
-    load_raw_nodes, LazyGraphDataset, EagerGraphDataset,
+    load_instances, LazyGraphDataset, EagerGraphDataset,
     GNN, lagrangian_v1ld, verify_v1ld,
 )
+from deepsets.model import DeepSetsGNN
 from torch_geometric.loader import DataLoader
 
 
@@ -57,25 +58,43 @@ def parse_args() -> argparse.Namespace:
                    help="Racine contenant train_base_s30/, train_N50/, etc. Défaut: <repo>/data/")
     p.add_argument("--out_dir",     default=None,
                    help="Dossier de sortie. Défaut: <repo>/gnn/runs/")
-    p.add_argument("--n_list",      type=int, nargs="+", default=[10, 15, 20],
+    p.add_argument("--n_list",      type=int, nargs="+", default=[10, 20],
                    help="Valeurs de n à charger.")
-    p.add_argument("--n_scens_n10", type=int, nargs="+", default=[50, 100, 200, 500],
-                   help="Valeurs de N à charger pour n=10 (multi-N). "
-                        "Pour n=15/20, seul N=500 (train_base_s30) est utilisé.")
+    p.add_argument("--n_scens",     type=int, nargs="+", default=[20, 50, 100],
+                   help="Valeurs de N à charger, appliquées à TOUS les n de "
+                        "--n_list (cf. discover_pairs — avant, seul n=10 "
+                        "balayait plusieurs N, n!=10 était figé à N=500).")
     p.add_argument("--m",           type=int, default=5)
     p.add_argument("--target_graphs", type=int, default=10_000,
                    help="Nombre total de graphes dans le dataset sélectionné.")
-    p.add_argument("--max_load",    type=int, default=60_000,
-                   help="Limite de records chargés par fichier avant la sélection stratifiée.")
+    p.add_argument("--root_frac",   type=float, default=0.05,
+                   help="Fraction du budget par combinaison (n,N) réservée aux racines "
+                        "(depth=0). Avant, TOUTES les racines étaient gardées "
+                        "inconditionnellement (jusqu'à 50k+ sur les données actuelles, "
+                        "5x le target_graphs par défaut) — plafonné ici à une fraction "
+                        "délibérée, cohérente avec la fréquence réelle d'appel de la "
+                        "racine en B&B (une fois par instance).")
+    p.add_argument("--reservoir_k", type=int, default=2,
+                   help="Nb max de nœuds non-racine gardés PAR INSTANCE, "
+                        "échantillonnés par reservoir sampling sur un seul "
+                        "passage du fichier complet (jamais tronqué) — "
+                        "chaque instance a une chance égale d'être vue, "
+                        "contrairement à une troncature par nb de lignes "
+                        "(--max_load avant) qui ne voyait jamais la fin du "
+                        "fichier pour les gros fichiers (n=20 : ~200 nœuds/"
+                        "instance en moyenne, un fichier de 2M lignes tronqué "
+                        "à 60k ne couvrait que les ~300 premières instances "
+                        "sur 9927+ disponibles).")
     p.add_argument("--train_frac",  type=float, default=0.8)
     p.add_argument("--seed",        type=int, default=42)
 
     # ── Modèle ────────────────────────────────────────────────────────────────
+    p.add_argument("--model_type", default="gnn", choices=["gnn", "deepsets"],
+                    help="gnn = GatedGraphConv (train_gnn_v1ld.GNN) ; "
+                         "deepsets = deepsets.model.DeepSetsGNN (même "
+                         "embed/pooling/tête, sans message passing).")
     p.add_argument("--hidden",         type=int,   default=128)
     p.add_argument("--use_max_pool",   action="store_true")
-    p.add_argument("--use_theta_attn", action="store_true")
-    p.add_argument("--use_film",       action="store_true")
-    p.add_argument("--lam_max",        type=float, default=0.0)
 
     # ── Entraînement ──────────────────────────────────────────────────────────
     p.add_argument("--n_epochs",    type=int,   default=100)
@@ -111,8 +130,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--warmup_lr",   type=float, default=1e-3)
     p.add_argument("--warmup_T",    type=int,   default=50,
                    help="Itérations sous-gradient pour générer λ* cibles.")
-    p.add_argument("--warmup_max_n",type=int,   default=15,
-                   help="n max pour le warmup (n=20 trop lent en Python B&B).")
+    p.add_argument("--warmup_max_n",type=int,   default=20,
+                   help="n max pour le warmup — 20 par défaut pour couvrir n=10 ET "
+                        "n=20 (le B&B C++ rend n=20 assez rapide, contrairement à "
+                        "l'ancien B&B Python).")
 
     # ── Évaluation & infrastructure ───────────────────────────────────────────
     p.add_argument("--eval_sample", type=int,   default=400,
@@ -145,47 +166,169 @@ def parse_args() -> argparse.Namespace:
 def discover_pairs(
     data_root: Path,
     n_list: list[int],
-    n_scens_n10: list[int],
+    n_scens: list[int],
     m: int,
 ) -> list[tuple[Path, Path, int, int]]:
     """
     Retourne [(inst_file, nodes_file, n_val, N_val)] pour chaque combinaison
-    disponible sur disque.
+    (n, N) de n_list × n_scens disponible sur disque. Deux layouts supportés,
+    essayés dans cet ordre :
 
-    n=10 : cherche dans train_N{N}/ pour N in n_scens_n10 (N=500 → train_base_s30)
-    n!=10 : cherche uniquement dans train_base_s30 (N=500)
+      1. train_base_s10/instances_n{n}_m{m}_N{N}.txt — nouveau layout (un seul
+         dossier, N dans le nom de fichier), utilisé pour n=10/20 × N=20/50/100.
+      2. train_N{N}/instances_n{n}_m{m}.txt (train_base_s30/ si N=500) —
+         ancien layout, un dossier par N.
+
+    Contrairement à avant, la même liste n_scens s'applique à TOUS les n de
+    n_list (avant, seul n=10 balayait plusieurs N ; n!=10 était figé à
+    N=500) — nécessaire pour scaler n=10 ET n=20 sur N=20/50/100.
     """
-    def src_dir(N: int) -> Path:
-        return data_root / ("train_base_s30" if N == 500 else f"train_N{N}")
-
     pairs = []
     for n in sorted(n_list):
-        n_vals = n_scens_n10 if n == 10 else [500]
-        for N in sorted(n_vals):
-            d = src_dir(N)
+        for N in sorted(n_scens):
+            s10_inst  = data_root / "train_base_s10" / f"instances_n{n}_m{m}_N{N}.txt"
+            s10_nodes = data_root / "train_base_s10" / f"nodes_n{n}_m{m}_N{N}.txt"
+            if s10_inst.exists() and s10_nodes.exists():
+                pairs.append((s10_inst, s10_nodes, n, N))
+                continue
+
+            d = data_root / ("train_base_s30" if N == 500 else f"train_N{N}")
             inst_f  = d / f"instances_n{n}_m{m}.txt"
             nodes_f = d / f"nodes_n{n}_m{m}.txt"
             if inst_f.exists() and nodes_f.exists():
                 pairs.append((inst_f, nodes_f, n, N))
             else:
-                print(f"  WARN: absent — n={n} N={N} ({d.name})")
+                print(f"  WARN: absent — n={n} N={N} (ni train_base_s10, ni {d.name})")
     return pairs
+
+
+def _parse_full_node_record(line: str, inst: dict) -> dict | None:
+    """Parse complet d'une ligne nodes_*.txt (formats B et C, cf. load_raw_nodes
+    dans train_gnn_v1ld.py — logique dupliquée ici volontairement pour ne pas
+    toucher ce module partagé par les autres scripts diag)."""
+    vals = [float(x) for x in line.split(",")]
+    inst_id   = int(vals[0])
+    depth     = int(vals[1])
+    curr_cost = vals[2]
+    n, N = inst["n"], inst["N"]
+    n_fmt_B = 5 + n + N
+    n_fmt_C = 3 + n + N
+
+    if len(vals) == n_fmt_C:
+        x_mask = np.array(vals[3 : 3 + n], dtype=np.int8)
+        z_mask = np.array(vals[3 + n : 3 + n + N], dtype=np.int8)
+    elif len(vals) >= n_fmt_B:
+        x_mask = np.array(vals[5 : 5 + n], dtype=np.int8)
+        z_mask = np.array(vals[5 + n : 5 + n + N], dtype=np.int8)
+    else:
+        return None
+
+    if (x_mask == 2).sum() == 0 or (z_mask == 2).sum() == 0:
+        return None
+
+    return {"inst_id": inst_id, "depth": depth, "curr_cost": curr_cost,
+            "x_mask": x_mask, "z_mask": z_mask}
+
+
+def stream_reservoir_by_instance(
+    nodes_file: Path,
+    instances: dict,
+    reservoir_k: int,
+    rng: random.Random,
+) -> tuple[list, list]:
+    """
+    Un seul passage sur nodes_file, jamais tronqué : chaque instance a une
+    chance égale d'être représentée, quelle que soit sa position dans le
+    fichier (contrairement à une troncature par nb de lignes, cf. --reservoir_k
+    dans parse_args).
+
+    - Racines (depth=0) : toutes gardées (une par instance, peu nombreuses).
+    - Non-racines : au plus `reservoir_k` par instance, par reservoir
+      sampling classique (algo R) — échantillon uniforme parmi TOUTES les
+      occurrences de cette instance dans le fichier, pas seulement les
+      premières rencontrées.
+
+    Le parsing complet (numpy x_mask/z_mask) n'est fait que pour les lignes
+    effectivement retenues par le reservoir ; les lignes rejetées ne coûtent
+    que deux int() (inst_id, depth) — nécessaire pour rester praticable sur
+    des fichiers de plusieurs millions de lignes.
+    """
+    roots: list = []
+    reservoirs: dict[int, list] = {}
+    seen_non_root: dict[int, int] = defaultdict(int)
+    skipped = 0
+
+    with open(nodes_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            c1 = line.index(",")
+            c2 = line.index(",", c1 + 1)
+            inst_id = int(line[:c1])
+            depth   = int(line[c1 + 1 : c2])
+
+            inst = instances.get(inst_id)
+            if inst is None:
+                skipped += 1
+                continue
+
+            if depth == 0:
+                rec = _parse_full_node_record(line, inst)
+                if rec is not None:
+                    roots.append(rec)
+                else:
+                    skipped += 1
+                continue
+
+            seen_non_root[inst_id] += 1
+            c   = seen_non_root[inst_id]
+            cur = reservoirs.get(inst_id)
+            if cur is None or len(cur) < reservoir_k:
+                # Encore en phase de remplissage — un enregistrement invalide
+                # (rec=None, ex. nœud sans item/scénario libre) ne compte pas
+                # comme un slot rempli, on continue à essayer sur les lignes
+                # suivantes de cette instance plutôt que de planter sur un
+                # index qui n'existe pas encore.
+                rec = _parse_full_node_record(line, inst)
+                if rec is not None:
+                    reservoirs.setdefault(inst_id, []).append(rec)
+            else:
+                # Réservoir plein (taille reservoir_k) : remplacement classique
+                # (algo R). `c` inclut les lignes invalides déjà vues — légère
+                # approximation si elles sont fréquentes, négligeable sinon.
+                j = rng.randint(1, c)
+                if j <= reservoir_k:
+                    rec = _parse_full_node_record(line, inst)
+                    if rec is not None:
+                        reservoirs[inst_id][j - 1] = rec
+
+    non_root = [r for lst in reservoirs.values() for r in lst]
+    return roots, non_root
 
 
 def load_and_merge(
     pairs: list[tuple[Path, Path, int, int]],
-    max_load: int,
+    reservoir_k: int,
+    seed: int,
 ) -> tuple[dict, list]:
     """
-    Charge les (inst_file, nodes_file) de toutes les paires, renumérote les
-    inst_ids pour éviter les collisions, annote chaque record avec n_orig et N_orig.
+    Charge les (inst_file, nodes_file) de toutes les paires par reservoir
+    sampling (stream_reservoir_by_instance, un seul passage par fichier —
+    voit TOUTES les instances, pas seulement un préfixe du fichier),
+    renumérote les inst_ids pour éviter les collisions, annote chaque record
+    avec n_orig et N_orig.
     """
+    rng = random.Random(seed)
     merged_instances: dict = {}
     merged_records:   list = []
 
     for inst_f, nodes_f, n_val, N_val in pairs:
-        print(f"  n={n_val} N={N_val}: chargement ...", end=" ", flush=True)
-        instances, records = load_raw_nodes(inst_f, nodes_f, max_records=max_load)
+        print(f"  n={n_val} N={N_val}: chargement (reservoir k={reservoir_k}) ...",
+              end=" ", flush=True)
+        instances = load_instances(inst_f)
+        roots, non_root = stream_reservoir_by_instance(nodes_f, instances, reservoir_k, rng)
+        records = roots + non_root
 
         offset = max(merged_instances.keys(), default=-1) + 1
         id_map = {old: old + offset for old in instances}
@@ -201,7 +344,10 @@ def load_and_merge(
         depth_cnt = defaultdict(int)
         for r in records:
             depth_cnt[r["depth"]] += 1
-        print(f"{len(records)} records  depths:{dict(sorted(depth_cnt.items()))}")
+        n_inst_seen = len({r["inst_id"] for r in records})
+        print(f"{len(roots)} racines + {len(non_root)} non-racines "
+              f"({n_inst_seen} instances vues sur {len(instances)} dispo)  "
+              f"depths:{dict(sorted(depth_cnt.items()))}")
 
     return merged_instances, merged_records
 
@@ -213,88 +359,105 @@ def load_and_merge(
 def select_stratified(
     all_records: list,
     target_graphs: int,
+    root_frac: float,
     seed: int,
 ) -> list:
     """
-    Garde TOUTES les racines (depth=0).
-    Complète jusqu'à target_graphs avec les depth>0, en round-robin sur
-    les buckets (n_orig, depth) pour maintenir la diversité.
+    Budget réparti à PARTS ÉGALES entre les combinaisons (n_orig, N_orig)
+    présentes dans all_records — pas proportionnellement à leur volume brut,
+    qui reflète un budget de collecte (combien d'instances on a eu le temps
+    de résoudre), pas une importance relative entre (n, N).
+
+    Dans chaque combinaison :
+      - racines (depth=0) plafonnées à `root_frac * budget_combo` — avant,
+        TOUTES les racines étaient gardées inconditionnellement, ce qui
+        représente ~50k+ racines sur les données actuelles (5x un
+        target_graphs=10k), écrasant silencieusement le budget demandé et
+        biaisant massivement vers un état jamais revisité en B&B réel (la
+        racine n'est appelée qu'une fois par instance, contre des milliers
+        de fois pour les nœuds profonds) ;
+      - non-racines échantillonnées par round-robin PAR INSTANCE (pas par
+        depth comme avant) : un enregistrement aléatoire par instance et par
+        tour, en priorisant les instances pas encore utilisées pour une
+        racine. Ça (a) préserve la distribution de depth telle que collectée
+        (chaque instance apporte son propre mélange, agrégé ça approxime la
+        fréquence de visite d'un vrai B&B, contrairement à un quota uniforme
+        par depth) et (b) maximise le nombre d'instances distinctes
+        représentées — pas de "racine + tous ses sous-nœuds".
     """
     rng = random.Random(seed)
 
-    roots     = [r for r in all_records if r["depth"] == 0]
-    non_roots = [r for r in all_records if r["depth"] >  0]
+    by_combo: dict = defaultdict(list)
+    for r in all_records:
+        by_combo[(r.get("n_orig", 0), r.get("N_orig", 0))].append(r)
 
-    budget = max(0, target_graphs - len(roots))
+    combos = sorted(by_combo.keys())
+    n_combos = len(combos) or 1
+    per_combo_budget = target_graphs // n_combos
 
-    # Buckets stratifiés
-    buckets: dict = defaultdict(list)
-    for r in non_roots:
-        buckets[(r.get("n_orig", 0), r.get("N_orig", 0), r["depth"])].append(r)
-    for lst in buckets.values():
-        rng.shuffle(lst)
+    selected: list = []
+    for combo in combos:
+        recs      = by_combo[combo]
+        roots     = [r for r in recs if r["depth"] == 0]
+        non_roots = [r for r in recs if r["depth"] >  0]
+        rng.shuffle(roots)
 
-    pools  = {k: list(v) for k, v in sorted(buckets.items())}
-    chosen: list = []
-    while len(chosen) < budget:
-        progress = False
-        for k in list(pools.keys()):
-            if pools[k] and len(chosen) < budget:
-                chosen.append(pools[k].pop(0))
-                progress = True
-        if not progress:
-            break
+        root_budget    = min(len(roots), round(per_combo_budget * root_frac))
+        nonroot_budget = max(0, per_combo_budget - root_budget)
 
-    selected = roots + chosen
+        chosen_roots  = roots[:root_budget]
+        used_inst_ids = {r["inst_id"] for r in chosen_roots}
 
-    # Stats
+        by_inst: dict = defaultdict(list)
+        for r in non_roots:
+            by_inst[r["inst_id"]].append(r)
+        for lst in by_inst.values():
+            rng.shuffle(lst)
+
+        # Instances pas encore utilisées par une racine en premier, pour
+        # maximiser le nombre total d'instances distinctes de ce combo.
+        inst_ids = list(by_inst.keys())
+        rng.shuffle(inst_ids)
+        inst_ids.sort(key=lambda i: i in used_inst_ids)
+
+        idx_per_inst: dict = {i: 0 for i in inst_ids}
+        chosen_nonroot: list = []
+        while len(chosen_nonroot) < nonroot_budget:
+            progress = False
+            for i in inst_ids:
+                lst = by_inst[i]
+                pos = idx_per_inst[i]
+                if pos < len(lst) and len(chosen_nonroot) < nonroot_budget:
+                    chosen_nonroot.append(lst[pos])
+                    idx_per_inst[i] = pos + 1
+                    progress = True
+            if not progress:
+                break
+
+        selected.extend(chosen_roots)
+        selected.extend(chosen_nonroot)
+
+        combo_inst_ids = used_inst_ids | {r["inst_id"] for r in chosen_nonroot}
+        print(f"  combo n={combo[0]:<3} N={combo[1]:<4} budget={per_combo_budget:6d}  "
+              f"racines={len(chosen_roots):5d}/{len(roots):<6d}  "
+              f"non-racines={len(chosen_nonroot):6d}/{len(non_roots):<8d}  "
+              f"instances_distinctes={len(combo_inst_ids)}")
+
+    # Stats globales
     by_depth: dict = defaultdict(int)
     by_n:     dict = defaultdict(int)
     by_N:     dict = defaultdict(int)
+    all_inst_ids: set = set()
     for r in selected:
         by_depth[r["depth"]] += 1
         by_n[r.get("n_orig", 0)] += 1
         by_N[r.get("N_orig", 0)] += 1
-    print(f"[select] {len(roots)} racines + {len(chosen)} non-racines = {len(selected)} total")
+        all_inst_ids.add(r["inst_id"])
+    print(f"[select] {len(selected)} graphes au total, {len(all_inst_ids)} instances distinctes")
     print(f"  par depth : {dict(sorted(by_depth.items()))}")
     print(f"  par n     : {dict(sorted(by_n.items()))}")
     print(f"  par N     : {dict(sorted(by_N.items()))}")
     return selected
-
-
-def select_eval_mixed(
-    test_records: list,
-    eval_sample: int,
-    seed: int,
-) -> list:
-    """
-    Sélection stratifiée par depth pour l'eval set, sur les records test uniquement.
-    Round-robin sur les depths pour reproduire la même distribution que le train set.
-    """
-    rng = random.Random(seed)
-    by_depth: dict = defaultdict(list)
-    for r in test_records:
-        by_depth[r["depth"]].append(r)
-
-    pools = {d: list(v) for d, v in sorted(by_depth.items())}
-    for lst in pools.values():
-        rng.shuffle(lst)
-
-    chosen: list = []
-    while len(chosen) < eval_sample:
-        progress = False
-        for d in list(pools.keys()):
-            if pools[d] and len(chosen) < eval_sample:
-                chosen.append(pools[d].pop(0))
-                progress = True
-        if not progress:
-            break
-
-    by_d: dict = defaultdict(int)
-    for r in chosen:
-        by_d[r["depth"]] += 1
-    print(f"[eval_mixed] {len(chosen)} graphes  par depth: {dict(sorted(by_d.items()))}")
-    return chosen
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,7 +698,7 @@ def main() -> None:
 
     # ── 1. Découverte des fichiers ─────────────────────────────────────────────
     log("Découverte des données ...")
-    pairs = discover_pairs(data_root, args.n_list, args.n_scens_n10, args.m)
+    pairs = discover_pairs(data_root, args.n_list, args.n_scens, args.m)
     if not pairs:
         log("ERREUR : aucun fichier trouvé — vérifiez --data_dir et --n_list")
         sys.exit(1)
@@ -544,11 +707,11 @@ def main() -> None:
 
     # ── 2. Chargement & fusion ─────────────────────────────────────────────────
     log("Chargement ...")
-    instances, all_records = load_and_merge(pairs, args.max_load)
+    instances, all_records = load_and_merge(pairs, args.reservoir_k, args.seed)
     log(f"  {len(instances)} instances  {len(all_records)} records bruts")
 
     # ── 3. Sélection stratifiée ────────────────────────────────────────────────
-    selected = select_stratified(all_records, args.target_graphs, args.seed)
+    selected = select_stratified(all_records, args.target_graphs, args.root_frac, args.seed)
     all_ds   = LazyGraphDataset(instances, selected)
 
     # ── 4. Split train / test ──────────────────────────────────────────────────
@@ -563,10 +726,15 @@ def main() -> None:
             by_d[r["depth"]] += 1
         log(f"  {label} par depth: {dict(sorted(by_d.items()))}")
 
-    # ── 5. Ensemble d'évaluation : stratifié par depth ou racines uniquement ──
+    # ── 5. Ensemble d'évaluation : même méthode que le train, ou racines uniquement ──
+    # select_stratified appliqué au pool test (déjà séparé par instance, donc
+    # aucune fuite) — garantit que train et eval suivent EXACTEMENT la même
+    # méthodologie (budget égal par combo n×N, plafond racine, diversité par
+    # instance), sinon un écart train/eval peut refléter une différence de
+    # distribution plutôt qu'une vraie différence de généralisation.
     if args.eval_mixed:
-        eval_recs = select_eval_mixed(test_ds.raw_records, args.eval_sample, args.seed)
-        eval_desc = f"{len(eval_recs)} graphes test (depths mixtes)"
+        eval_recs = select_stratified(test_ds.raw_records, args.eval_sample, args.root_frac, args.seed)
+        eval_desc = f"{len(eval_recs)} graphes test (même méthode que train)"
     else:
         root_test_recs = [r for r in test_ds.raw_records if r["depth"] == 0]
         n_eval = min(args.eval_sample, len(root_test_recs))
@@ -592,10 +760,9 @@ def main() -> None:
     log(f"  fait en {time.time()-t0_sg:.1f}s  mean L1_sg(T={args.eval_sg_T}) = {np.mean(l1_sg_eval):.2f}")
 
     # ── 6. Modèle ──────────────────────────────────────────────────────────────
-    model = GNN(m=args.m, hidden=args.hidden, lam_max=args.lam_max,
-                use_max_pool=args.use_max_pool,
-                use_theta_attn=args.use_theta_attn,
-                use_film=args.use_film).to(device)
+    model_cls = GNN if args.model_type == "gnn" else DeepSetsGNN
+    model = model_cls(m=args.m, hidden=args.hidden,
+                       use_max_pool=args.use_max_pool).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
                                  weight_decay=args.weight_decay)
     if args.no_scheduler:
@@ -629,14 +796,20 @@ def main() -> None:
         sched_desc = "CosineAnnealingLR"
 
     n_params = sum(p.numel() for p in model.parameters())
-    log(f"GNN — m={args.m}  hidden={args.hidden}  params={n_params:,}  "
-        f"use_max_pool={args.use_max_pool}  use_theta_attn={args.use_theta_attn}  "
-        f"use_film={args.use_film}  scheduler={sched_desc}  depth_w0={args.depth_w0}")
+    log(f"{args.model_type} — m={args.m}  hidden={args.hidden}  params={n_params:,}  "
+        f"use_max_pool={args.use_max_pool}  "
+        f"scheduler={sched_desc}  depth_w0={args.depth_w0}")
 
     # ── 7. Run name & auto-resume ──────────────────────────────────────────────
+    # run_name NE contient PAS n_epochs : c'est l'identité de la session
+    # d'entraînement (utilisée pour retrouver les checkpoints), pas la cible
+    # d'epochs. Avant, ep{args.n_epochs} en faisait partie — reprendre un
+    # entraînement en visant PLUS d'epochs (ex. 100 → 150) changeait le nom,
+    # find_latest_checkpoint ne retrouvait plus les checkpoints existants et
+    # repartait de zéro SILENCIEUSEMENT (pas d'erreur, juste un mauvais départ).
     tag = f"scaled_n{'_'.join(str(n) for n in sorted(args.n_list))}"
     tag_suffix = f"_{args.run_tag}" if args.run_tag else ""
-    run_name = (f"{tag}_ep{args.n_epochs}_lr{args.lr}_bs{args.batch_size}"
+    run_name = (f"{tag}_lr{args.lr}_bs{args.batch_size}"
                 f"_h{args.hidden}_seed{args.seed}{tag_suffix}")
     metrics_path = out_dir / f"metrics_{run_name}.json"
     fig_path     = out_dir / f"fig_{run_name}.png"
@@ -658,8 +831,16 @@ def main() -> None:
         ckpt = torch.load(latest, map_location=device)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
-        scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"] + 1
+        # `scheduler` a déjà été (re)construit juste au-dessus avec le
+        # --n_epochs COURANT (pas restauré depuis le checkpoint) : si on
+        # reprend pour viser plus d'epochs qu'à l'origine (ex. 100 → 150),
+        # charger l'état sauvegardé recollerait sur l'ancien T_max et ferait
+        # remonter le LR au lieu de continuer sa décroissance. On "rattrape"
+        # plutôt le scheduler frais en rejouant ses pas jusqu'à start_epoch-1
+        # — la courbe suit alors la NOUVELLE cible du début à la fin.
+        for _ in range(start_epoch - 1):
+            scheduler.step()
         history     = ckpt.get("history", history)
         for k in {"epochs_loss", "loss", "loss_std", "l1_train", "lam_abs_mean", "lam_abs_max",
                   "t2_mean", "grad_norm_max", "grad_norm_mean",
@@ -802,6 +983,10 @@ def main() -> None:
             history["l1_by_n"].append(l1_by_n)
             eval_str = (f"  eval: L1={l1_eval:.4f}  loss_eval={loss_eval:.4f}"
                         f"  pct_vs_sg={pct_vs_sg:.1f}%  T2_eval={t2_eval:.4f}")
+            by_n_str = "  ".join(
+                f"n={n_key}: L1={v['l1_mean']:.2f} pct_vs_sg={v['pct_better']:.1f}% (N={v['count']})"
+                for n_key, v in l1_by_n.items())
+            log(f"  [généralisation par n] {by_n_str}")
 
         elapsed   = time.time() - t_start
         done      = epoch - start_epoch + 1

@@ -125,10 +125,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_max_pool", action="store_true",
                    help="Pool scénario = [mean | max] au lieu de [mean] seul "
                         "(capte les scénarios les plus contraints).")
-    p.add_argument("--use_theta_attn", action="store_true",
-                   help="Pool graphe attentionnel pondéré par θ_i (v20).")
-    p.add_argument("--use_film", action="store_true",
-                   help="FiLM conditioning après l'embed : γ(ctx)⊙h + β(ctx) (v21).")
     p.add_argument("--lr_T0",    type=int, default=0,
                    help="Période T_0 pour CosineAnnealingWarmRestarts. "
                         "0 = CosineAnnealingLR standard (défaut).")
@@ -508,9 +504,7 @@ def main() -> None:
 
     # ── 3. Modèle + optimiseur ────────────────────────────────────────────────
     model     = GNN(m=args.m, hidden=args.hidden, lam_max=args.lam_max,
-                    use_max_pool=args.use_max_pool,
-                    use_theta_attn=args.use_theta_attn,
-                    use_film=args.use_film).to(device)
+                    use_max_pool=args.use_max_pool).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.0,
                                  betas=(args.beta1, 0.999))
     if args.no_scheduler:
@@ -548,8 +542,8 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[diag] GNN : {n_params:,} params  lr={args.lr}  epochs={args.n_epochs}  "
           f"batch={args.batch_size}  max_norm={args.max_norm}  "
-          f"use_max_pool={args.use_max_pool}  use_theta_attn={args.use_theta_attn}  "
-          f"use_film={args.use_film}  scheduler={sched_desc}  depth_alpha={args.depth_alpha}")
+          f"use_max_pool={args.use_max_pool}  "
+          f"scheduler={sched_desc}  depth_alpha={args.depth_alpha}")
 
     # ── 4. Historique par instance (train) + agrégat eval ────────────────────
     l1_ref: list = []   # L1 de référence sous-gradient (T=50) par graphe, rempli pendant warmup

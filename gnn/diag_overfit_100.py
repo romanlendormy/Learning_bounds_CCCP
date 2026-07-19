@@ -46,7 +46,7 @@ REPO_ROOT  = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from gnn.train_gnn_v1ld import (
-    load_raw_nodes, LazyGraphDataset, EagerGraphDataset,
+    load_raw_nodes, LazyGraphDataset,
     GNN, lagrangian_v1ld, verify_v1ld,
 )
 
@@ -92,6 +92,11 @@ def parse_args() -> argparse.Namespace:
                    help="Depth max des nœuds sélectionnés.")
     p.add_argument("--max_load",     type=int,   default=10_000,
                    help="Limite de records chargés par fichier (pour la vitesse).")
+    p.add_argument("--max_instances", type=int,  default=0,
+                   help="Restreint le nombre d'instances de base distinctes utilisées par "
+                        "groupe N (avant le split train/eval et le ré-échantillonnage par "
+                        "profondeur B&B). 0 = pas de restriction. Sert à isoler l'effet de la "
+                        "diversité d'instances sous-jacentes du nombre de graphes d'entraînement.")
     p.add_argument("--skip_subgrad",  action="store_true",
                    help="Sauter verify_v1ld pour toutes les instances.")
     p.add_argument("--subgrad_max_n", type=int, default=15,
@@ -125,10 +130,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_max_pool", action="store_true",
                    help="Pool scénario = [mean | max] au lieu de [mean] seul "
                         "(capte les scénarios les plus contraints).")
-    p.add_argument("--use_theta_attn", action="store_true",
-                   help="Pool graphe attentionnel pondéré par θ_i (v20).")
-    p.add_argument("--use_film", action="store_true",
-                   help="FiLM conditioning après l'embed : γ(ctx)⊙h + β(ctx) (v21).")
     p.add_argument("--lr_T0",    type=int, default=0,
                    help="Période T_0 pour CosineAnnealingWarmRestarts. "
                         "0 = CosineAnnealingLR standard (défaut).")
@@ -145,6 +146,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--center_lam", action="store_true",
                    help="Centrage des λ sur les scénarios après la sortie du GNN : "
                         "λ_ik ← λ_ik − (1/N_z) Σ_i λ_ik. Élimine la dérive de jauge.")
+    p.add_argument("--no_c_scale_norm", action="store_true",
+                   help="Désactive la normalisation de la loss par c_scale "
+                        "(ablation : sans ça, l'échelle de la loss varie avec N).")
+    p.add_argument("--save_checkpoint", action="store_true",
+                   help="Sauvegarde model_state_dict (checkpoint.pt) et le λ final complet "
+                        "par instance (lambdas_final.pt) dans out_dir, pour ré-évaluation "
+                        "hors-ligne (ex. raffinement post-hoc via verify_v1ld(lam_init=...)).")
     p.add_argument("--device",        default="auto", choices=["auto", "cpu", "cuda"])
     return p.parse_args()
 
@@ -187,6 +195,7 @@ def load_and_select_split(
     n_list: list,
     eval_frac: float = 0.2,
     stratify_by_N: bool = False,
+    max_instances: int = 0,
 ) -> tuple[dict, list, list]:
     """
     Split déterministe train/eval par inst_id (aucune instance commune).
@@ -195,6 +204,11 @@ def load_and_select_split(
     stratify_by_N=True : sélectionne n_per_group_train // K records par valeur de N
     distincte présente dans les données (K = nombre de valeurs N détectées), en
     appliquant un round-robin sur les depths indépendamment pour chaque groupe N.
+
+    max_instances > 0 : restreint le pool d'instances de base (avant split train/eval)
+    à ce nombre, par groupe N — pour isoler l'effet de la diversité d'instances du
+    nombre de graphes d'entraînement (ré-échantillonnés par profondeur B&B).
+
     Retourne (merged_instances, train_records, eval_records).
     """
     rng = random.Random(seed)
@@ -217,6 +231,11 @@ def load_and_select_split(
         inst_ids_s = sorted(instances_s.keys())
         rng_s = random.Random(seed ^ (n_val * 31337) ^ (Nv * 7919))
         rng_s.shuffle(inst_ids_s)
+        if max_instances and max_instances > 0 and len(inst_ids_s) > max_instances:
+            print(f"[max_instances] N={Nv}: restreint à {max_instances} instances de base "
+                  f"(sur {len(inst_ids_s)} disponibles)", flush=True)
+            inst_ids_s = inst_ids_s[:max_instances]
+        allowed_ids_s = set(inst_ids_s)
         n_eval_s = max(1, round(len(inst_ids_s) * eval_frac))
         eval_ids_s = set(inst_ids_s[:n_eval_s])
 
@@ -228,6 +247,8 @@ def load_and_select_split(
         train_s, eval_s = [], []
         for rec in records_s:
             orig_id = rec["inst_id"]
+            if orig_id not in allowed_ids_s:
+                continue
             new_rec = {**rec, "inst_id": id_map_s[orig_id], "n_orig": n_val}
             (eval_s if orig_id in eval_ids_s else train_s).append(new_rec)
         del records_s
@@ -477,22 +498,29 @@ def main() -> None:
         data_dir, args.m, n_per_group, args.max_depth, args.seed, args.max_load,
         n_list=n_list, eval_frac=0.2,
         stratify_by_N=args.stratify_N,
+        max_instances=args.max_instances,
     )
     print(f"[diag] {len(train_recs)} train / {len(eval_recs)} eval enregistrements")
 
-    # ── 2. Construction EagerGraphDataset train + eval ────────────────────────
-    # Note : les graphes N=500 ont O(N_z²) ≈ 1,9M arêtes → ~39 MB/graphe.
-    # 333 graphes N=500 ≈ 13 GB → nécessite --mem=32G en SLURM.
-    print("[diag] Construction graphes PyG ...", flush=True)
-    lazy_ds    = LazyGraphDataset(merged_instances, train_recs)
-    eager_ds   = EagerGraphDataset(lazy_ds)
-    graphs_dev = [g.to(device) for g in eager_ds.graphs]
-    n_total    = len(graphs_dev)
+    # ── 2. Accès paresseux aux graphes PyG (construction à la volée) ──────────
+    # Note : les graphes N=500 ont O(N_z²) ≈ 1,9M arêtes → ~39 MB/graphe, donc
+    # un cache éager de ~1000 graphes N=500 (train+eval) coûte ~40-50 GB de
+    # RAM. La construction elle-même est bon marché (mesurée ~0.13s/graphe
+    # N=500, depth=0) — négligeable face au forward+backward du GNN sur ces
+    # mêmes graphes (~6.3s/instance, cf. discussion protocole). Le lazy
+    # loading règle donc le problème mémoire à coût quasi nul (~2% overhead).
+    print("[diag] Datasets lazy (graphes construits à la volée) ...", flush=True)
+    lazy_ds  = LazyGraphDataset(merged_instances, train_recs)
+    n_total  = len(train_recs)
 
-    lazy_eval   = LazyGraphDataset(merged_instances, eval_recs)
-    eager_eval  = EagerGraphDataset(lazy_eval)
-    eval_graphs = [g.to(device) for g in eager_eval.graphs]
-    n_eval      = len(eval_graphs)
+    lazy_eval = LazyGraphDataset(merged_instances, eval_recs)
+    n_eval    = len(eval_recs)
+
+    def get_graph(gi: int):
+        return lazy_ds[gi].to(device)
+
+    def get_eval_graph(ei: int):
+        return lazy_eval[ei].to(device)
 
     # Métadonnées scalaires depuis les records (pas besoin de boucler sur les graphes)
     depths   = [rec["depth"]          for rec in train_recs]
@@ -508,9 +536,7 @@ def main() -> None:
 
     # ── 3. Modèle + optimiseur ────────────────────────────────────────────────
     model     = GNN(m=args.m, hidden=args.hidden, lam_max=args.lam_max,
-                    use_max_pool=args.use_max_pool,
-                    use_theta_attn=args.use_theta_attn,
-                    use_film=args.use_film).to(device)
+                    use_max_pool=args.use_max_pool).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.0,
                                  betas=(args.beta1, 0.999))
     if args.no_scheduler:
@@ -548,11 +574,11 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[diag] GNN : {n_params:,} params  lr={args.lr}  epochs={args.n_epochs}  "
           f"batch={args.batch_size}  max_norm={args.max_norm}  "
-          f"use_max_pool={args.use_max_pool}  use_theta_attn={args.use_theta_attn}  "
-          f"use_film={args.use_film}  scheduler={sched_desc}  depth_alpha={args.depth_alpha}")
+          f"use_max_pool={args.use_max_pool}  "
+          f"scheduler={sched_desc}  depth_alpha={args.depth_alpha}")
 
     # ── 4. Historique par instance (train) + agrégat eval ────────────────────
-    l1_ref: dict = {}   # L1 de référence sous-gradient (T=50) par graphe (clé=gi), rempli pendant warmup
+    l1_ref: dict = {}   # L1 de référence sous-gradient (T=50) par graphe (clé=gi), rempli en 5.
 
     hist_epochs:     list = []
     hist_loss:       dict = {i: [] for i in range(n_total)}
@@ -565,10 +591,25 @@ def main() -> None:
     hist_eval_loss:   list = []  # L1 moyen sur l'eval set
     hist_eval_lam:    list = []  # |λ|avg moyen sur l'eval set
 
+    # Historique gradient norm (diagnostic de stabilité, comparable entre configs)
+    hist_gnorm_mean: list = []
+    hist_gnorm_max:  list = []
+
+    # Historique par N (nb de scénarios) — comparaison multi-N entre configs
+    N_set    = sorted(set(N_vals))
+    hist_by_N: dict = {
+        Nv: {"epochs": [], "l1_mean": [], "l1_std": [], "pct_better_T50": []}
+        for Nv in N_set
+    }
+    # Écart L1 max-min entre groupes N à chaque epoch d'éval (déséquilibre multi-N)
+    hist_l1_spread:     list = []  # absolu
+    hist_l1_spread_rel: list = []  # relatif (/ moyenne globale)
+
     def eval_all() -> None:
         model.eval()
         with torch.no_grad():
-            for gi, g in enumerate(graphs_dev):
+            for gi in range(n_total):
+                g   = get_graph(gi)
                 lam = model(g)
                 if args.center_lam:
                     lam = _apply_center(lam, int(g.N_z), int(g.n_g))
@@ -583,11 +624,12 @@ def main() -> None:
         model.train()
 
     def eval_set() -> tuple[float, float]:
-        """Évalue le modèle sur eval_graphs (instances distinctes). Retourne (L1_mean, |λ|avg_mean)."""
+        """Évalue le modèle sur les instances d'éval (distinctes du train). Retourne (L1_mean, |λ|avg_mean)."""
         model.eval()
         l1_vals, lam_vals = [], []
         with torch.no_grad():
-            for g in eval_graphs:
+            for ei in range(n_eval):
+                g   = get_eval_graph(ei)
                 lam = model(g)
                 if args.center_lam:
                     lam = _apply_center(lam, int(g.N_z), int(g.n_g))
@@ -596,31 +638,45 @@ def main() -> None:
         model.train()
         return float(np.mean(l1_vals)), float(np.mean(lam_vals))
 
-    # ── 5. Warmup supervisé (L2 sur λ* sous-gradient) ────────────────────────
-    if args.n_warmup > 0:
-        # Sélection des graphes pour le warmup : éviter les N=500 (1.9M edges → trop lent sur CPU)
-        wm_max_n = args.warmup_max_n
-        wm_indices_all = [gi for gi in range(n_total)
-                          if wm_max_n == 0 or N_vals[gi] <= wm_max_n]
-        wm_n_graphs = len(wm_indices_all)
-        n_filter_msg = (f"N≤{wm_max_n}" if wm_max_n > 0 else "tous") + f" → {wm_n_graphs} graphes"
-        print(f"\n[warmup] Génération cibles sous-gradient (T=50) "
-              f"sur {wm_n_graphs} graphes ({n_filter_msg}) ...", flush=True)
-        t_wm = time.perf_counter()
-        lam_targets = {}
-        for gi in wm_indices_all:
-            g_cpu = graphs_dev[gi].cpu()
-            _, lam_star = verify_v1ld(g_cpu, T=50, return_lam=True)
-            lam_targets[gi] = torch.tensor(lam_star.astype(np.float32).flatten(),
-                                           dtype=torch.float32, device=device)
-        t2_star = [
-            lam_targets[gi].view(int(graphs_dev[gi].N_z), int(graphs_dev[gi].n_g)).std(dim=0).mean().item()
-            for gi in wm_indices_all
-        ]
-        print(f"[warmup] Cibles prêtes en {time.perf_counter()-t_wm:.1f}s  "
-              f"|λ*| mean={np.mean([lam_targets[gi].abs().mean().item() for gi in wm_indices_all]):.4f}  "
-              f"T2_std(λ*)={np.mean(t2_star):.4f}")
+    # ── 5. Référence sous-gradient T=50 ───────────────────────────────────────
+    # Calculée systématiquement (indépendamment de n_warmup) : c'est elle qui
+    # sert de référence au "(X%)" affiché dans les logs par epoch (L1 [N50=...(X%)]).
+    # Réutilisée comme cibles supervisées si le warmup est activé (5b).
+    wm_max_n = args.warmup_max_n
+    wm_indices_all = [gi for gi in range(n_total)
+                      if wm_max_n == 0 or N_vals[gi] <= wm_max_n]
+    wm_n_graphs = len(wm_indices_all)
+    n_filter_msg = (f"N≤{wm_max_n}" if wm_max_n > 0 else "tous") + f" → {wm_n_graphs} graphes"
+    print(f"\n[ref] Génération référence sous-gradient T=50 "
+          f"sur {wm_n_graphs} graphes ({n_filter_msg}) ...", flush=True)
+    t_wm = time.perf_counter()
+    lam_targets = {}
+    nz_ng_cache: dict = {}   # (N_z, n_g) par gi — évite de reconstruire le graphe pour t2_star
+    for gi in wm_indices_all:
+        g = get_graph(gi)
+        _, lam_star = verify_v1ld(g.cpu(), T=50, return_lam=True)
+        lam_t = torch.tensor(lam_star.astype(np.float32).flatten(),
+                             dtype=torch.float32, device=device)
+        lam_targets[gi] = lam_t
+        l1_ref[gi]      = lagrangian_v1ld(lam_t, g).item()
+        nz_ng_cache[gi] = (int(g.N_z), int(g.n_g))
+    t2_star = [
+        lam_targets[gi].view(*nz_ng_cache[gi]).std(dim=0).mean().item()
+        for gi in wm_indices_all
+    ]
+    print(f"[ref] Cibles T=50 prêtes en {time.perf_counter()-t_wm:.1f}s  "
+          f"|λ*| mean={np.mean([lam_targets[gi].abs().mean().item() for gi in wm_indices_all]):.4f}  "
+          f"T2_std(λ*)={np.mean(t2_star):.4f}")
+    l1_ref_by_N = defaultdict(list)
+    for gi in wm_indices_all:
+        l1_ref_by_N[N_vals[gi]].append(l1_ref[gi])
+    ref_summ = "  ".join(
+        f"N{Nv}={np.mean(v):.1f}" for Nv, v in sorted(l1_ref_by_N.items())
+    )
+    print(f"[ref] L1 référence sous-grad (T=50) : {ref_summ}", flush=True)
 
+    # ── 5b. Warmup supervisé (optionnel — réutilise les cibles T=50 ci-dessus) ─
+    if args.n_warmup > 0:
         opt_wm   = torch.optim.Adam(model.parameters(), lr=args.warmup_lr)
         sched_wm = torch.optim.lr_scheduler.CosineAnnealingLR(
             opt_wm, T_max=args.n_warmup, eta_min=1e-5)
@@ -633,7 +689,7 @@ def main() -> None:
             random.shuffle(wm_indices)
             mse_sum = 0.0
             for gi in wm_indices:
-                g   = graphs_dev[gi]
+                g   = get_graph(gi)
                 opt_wm.zero_grad()
                 lam_pred = model(g)
                 loss_wm  = ((lam_pred - lam_targets[gi]) ** 2).mean()
@@ -649,7 +705,7 @@ def main() -> None:
                 l1_vals = []
                 with torch.no_grad():
                     for gi in wm_indices_all:
-                        g = graphs_dev[gi]
+                        g = get_graph(gi)
                         l1_vals.append(lagrangian_v1ld(model(g), g).item()
                                        / max(float(g.c_scale), 1.0))
                 model.train()
@@ -658,18 +714,6 @@ def main() -> None:
                       f"L1_norm={np.mean(l1_vals):.4f}  "
                       f"t={time.perf_counter()-t_wm:.0f}s", flush=True)
         print(f"[warmup] Terminé en {time.perf_counter()-t_wm:.0f}s\n", flush=True)
-        model.eval()
-        with torch.no_grad():
-            for gi in wm_indices_all:
-                l1_ref[gi] = lagrangian_v1ld(lam_targets[gi], graphs_dev[gi]).item()
-        model.train()
-        l1_ref_by_N = defaultdict(list)
-        for gi in wm_indices_all:
-            l1_ref_by_N[N_vals[gi]].append(l1_ref[gi])
-        ref_summ = "  ".join(
-            f"N{Nv}={np.mean(v):.1f}" for Nv, v in sorted(l1_ref_by_N.items())
-        )
-        print(f"[warmup] L1 référence sous-grad (T=50) : {ref_summ}", flush=True)
 
     # ── 5b. Convergence complète sous-gradient (optionnel) ────────────────────
     if args.subgrad_full:
@@ -679,8 +723,8 @@ def main() -> None:
               f"sur {n_total} instances ...", flush=True)
         t_sf = time.perf_counter()
         sf_l1, sf_lam_avg, sf_lam_max, sf_t2, sf_iters = [], [], [], [], []
-        for gi, g in enumerate(graphs_dev):
-            g_cpu = g.cpu()
+        for gi in range(n_total):
+            g_cpu = get_graph(gi).cpu()
             l1_sg, n_it, lam_sg = verify_v1ld(
                 g_cpu,
                 T=args.subgrad_full_T_max,
@@ -725,21 +769,29 @@ def main() -> None:
         epoch_loss  = 0.0
         accum_count = 0
         accum_grads = None  # buffer des gradients clippés par instance
+        epoch_gnorm_sum = 0.0
+        epoch_gnorm_max = 0.0
+        epoch_gnorm_n   = 0
 
         for step_i, gi in enumerate(indices):
-            g       = graphs_dev[gi]
+            g       = get_graph(gi)
             optimizer.zero_grad()
             lam  = model(g)
             if args.center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
-            w    = (depths[gi] + 1) ** args.depth_alpha
-            loss = (lagrangian_v1ld(lam, g) / max(float(g.c_scale), 1.0) + args.alpha_l2 * (lam ** 2).mean()) * w
+            w = (depths[gi] + 1) ** args.depth_alpha
+            c_norm = 1.0 if args.no_c_scale_norm else max(float(g.c_scale), 1.0)
+            loss = (lagrangian_v1ld(lam, g) / c_norm + args.alpha_l2 * (lam ** 2).mean()) * w
             loss.backward()
 
-            # Clip par instance avant accumulation (max_norm=0 → désactivé)
-            if args.max_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(),
-                                               max_norm=args.max_norm)
+            # Clip par instance avant accumulation (max_norm<=0 → pas de clip réel,
+            # mais on calcule quand même la norme pour le diagnostic de stabilité)
+            gn = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=args.max_norm if args.max_norm > 0 else float("inf"))
+            epoch_gnorm_sum += gn.item()
+            epoch_gnorm_max  = max(epoch_gnorm_max, gn.item())
+            epoch_gnorm_n   += 1
 
             # Accumulation manuelle des gradients clippés
             if accum_grads is None:
@@ -771,12 +823,18 @@ def main() -> None:
         do_train_eval = (epoch % args.eval_every == 0)
         do_eval_set   = (epoch % eval_set_freq == 0)
 
+        gnorm_mean_ep = epoch_gnorm_sum / max(epoch_gnorm_n, 1)
+        hist_gnorm_mean.append(gnorm_mean_ep)
+        hist_gnorm_max.append(epoch_gnorm_max)
+
         if do_train_eval:
             hist_epochs.append(epoch)
             eval_all()
             elapsed = time.perf_counter() - t_start
 
-            # Résumé par N (nombre de scénarios)
+            # Résumé par N (nombre de scénarios) — le "(X%)" fait référence à la
+            # borne sous-gradient T=50 calculée en 5. (l1_ref), toujours disponible
+            # que le warmup soit activé ou non.
             by_N_loss:   dict = defaultdict(list)
             by_N_better: dict = defaultdict(list)
             for gi in range(n_total):
@@ -786,14 +844,30 @@ def main() -> None:
                 if gi in l1_ref:
                     by_N_better[Nv].append(l1_gi < l1_ref[gi])
             summ_parts = []
+            by_N_means = {}
             for Nv in sorted(by_N_loss):
-                l1_mean = np.mean(by_N_loss[Nv])
+                l1_mean = float(np.mean(by_N_loss[Nv]))
+                l1_std  = float(np.std(by_N_loss[Nv]))
+                by_N_means[Nv] = l1_mean
+                hist_by_N[Nv]["epochs"].append(epoch)
+                hist_by_N[Nv]["l1_mean"].append(l1_mean)
+                hist_by_N[Nv]["l1_std"].append(l1_std)
                 if l1_ref and Nv in by_N_better:
                     pct = 100.0 * np.mean(by_N_better[Nv])
+                    hist_by_N[Nv]["pct_better_T50"].append(pct)
                     summ_parts.append(f"N{Nv}={l1_mean:.1f}({pct:.0f}%)")
                 else:
+                    hist_by_N[Nv]["pct_better_T50"].append(None)
                     summ_parts.append(f"N{Nv}={l1_mean:.1f}")
             summ = "  ".join(summ_parts)
+
+            # Déséquilibre entre groupes N (utile pour comparer des configs :
+            # un écart qui grandit = le modèle apprend inégalement selon N)
+            means_list = list(by_N_means.values())
+            spread     = float(max(means_list) - min(means_list)) if len(means_list) > 1 else 0.0
+            spread_rel = spread / max(np.mean(means_list), 1e-9) if len(means_list) > 1 else 0.0
+            hist_l1_spread.append(spread)
+            hist_l1_spread_rel.append(spread_rel)
 
             lam_mean_ep  = float(np.mean([hist_lam[gi][-1]       for gi in range(n_total)]))
             lam_max_ep   = float(np.max( [hist_lam[gi][-1]       for gi in range(n_total)]))
@@ -810,8 +884,10 @@ def main() -> None:
                 eval_suffix = f"  |eval| L1={ev_l1:.4f} |λ|={ev_lam:.3f}"
 
             print(f"ep {epoch:4d}/{args.n_epochs}  loss_norm={mean_loss:.4f}  "
-                  f"L1 [{summ}]  |λ|avg={lam_mean_ep:.3f}(max={lam_max_ep:.3f})  "
-                  f"T2_std={lam_std_ep:.4f}  gauge={gauge_ep:.4f}  resid={resid_ep:.4f}"
+                  f"L1 [{summ}]  spread={spread:.1f}({spread_rel:.1%})  "
+                  f"|λ|avg={lam_mean_ep:.3f}(max={lam_max_ep:.3f})  "
+                  f"T2_std={lam_std_ep:.4f}  gauge={gauge_ep:.4f}  resid={resid_ep:.4f}  "
+                  f"gnorm={gnorm_mean_ep:.3f}(max={epoch_gnorm_max:.3f})"
                   f"{eval_suffix}  t={elapsed:.0f}s", flush=True)
 
         elif do_eval_set:
@@ -825,20 +901,51 @@ def main() -> None:
 
     print(f"[diag] Entraînement terminé ({time.perf_counter() - t_start:.0f}s)")
 
-    # ── 7. Évaluation finale ──────────────────────────────────────────────────
+    # ── 7. Évaluation finale (+ 7b trackers v10, même passe — évite de
+    #      reconstruire deux fois chaque graphe) ───────────────────────────────
     model.eval()
-    final_l1       = []
-    final_lam_mean = []
-    final_lam_max  = []
+    final_l1            = []
+    final_lam_mean       = []
+    final_lam_max        = []
+    final_lam_by_item    = []
+    final_lam_std_scen   = []
+    lam_dump: dict = {}   # rempli seulement si --save_checkpoint
 
     with torch.no_grad():
-        for g in graphs_dev:
+        for gi in range(n_total):
+            g   = get_graph(gi)
             lam = model(g)
             if args.center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
             final_l1.append(lagrangian_v1ld(lam, g).item())
             final_lam_mean.append(lam.abs().mean().item())
             final_lam_max.append(lam.abs().max().item())
+            lam_2d = lam.view(g.N_z, g.n_g)                 # (N_z, n_g)
+            final_lam_by_item.append(lam_2d.abs().mean(dim=0).cpu().numpy().tolist())
+            final_lam_std_scen.append(lam_2d.std(dim=0).cpu().numpy().tolist())
+            if args.save_checkpoint:
+                # Auto-suffisant : inclut A_g/b_res_g/c_g/epsilon/n_fixed_z1/c_scale
+                # pour pouvoir ré-évaluer lagrangian_v1ld/verify_v1ld hors-ligne sans
+                # dépendre des fichiers de données d'origine (souvent sur SLURM_TMPDIR,
+                # éphémères après la fin du job).
+                lam_dump[gi] = {
+                    "lam_2d": lam_2d.detach().cpu().numpy().astype("float32"),
+                    "N": int(g.N), "N_z": int(g.N_z), "n_g": int(g.n_g),
+                    "n_orig": int(n_origs[gi]), "depth": int(depths[gi]),
+                    "A_g": g.A_g.cpu().numpy().astype("float32"),
+                    "b_res_g": g.b_res_g.cpu().numpy().astype("float32"),
+                    "c_g": g.c_g.cpu().numpy().astype("float32"),
+                    "c_scale": float(g.c_scale),
+                    "epsilon": float(g.epsilon),
+                    "n_fixed_z1": int(g.n_fixed_z1),
+                    "opt": float(g.opt),
+                }
+
+    if args.save_checkpoint:
+        torch.save({"model_state_dict": model.state_dict(),
+                    "args": vars(args)}, Path(args.out_dir) / "checkpoint.pt")
+        torch.save(lam_dump, Path(args.out_dir) / "lambdas_final.pt")
+        print(f"[diag] Checkpoint + λ finaux sauvegardés dans {args.out_dir}", flush=True)
 
     final_subgrad: list = [None] * n_total   # None pour les instances ignorées
     if not args.skip_subgrad:
@@ -847,24 +954,11 @@ def main() -> None:
               f"{len(sg_todo)}/{n_total} instances (n≤{args.subgrad_max_n}) ...", flush=True)
         t_sg = time.perf_counter()
         for j, gi in enumerate(sg_todo):
-            g_cpu = graphs_dev[gi].cpu()   # verify_v1ld utilise numpy (CPU requis)
+            g_cpu = get_graph(gi).cpu()   # verify_v1ld utilise numpy (CPU requis)
             final_subgrad[gi] = verify_v1ld(g_cpu, T=100)
             if (j + 1) % 10 == 0 or j == len(sg_todo) - 1:
                 print(f"  [{j+1}/{len(sg_todo)}]  t={time.perf_counter()-t_sg:.0f}s",
                       flush=True)
-
-    # ── 7b. Trackers v10 ─────────────────────────────────────────────────────
-    final_lam_by_item   = []
-    final_lam_std_scen  = []
-    model.eval()
-    with torch.no_grad():
-        for g in graphs_dev:
-            lam = model(g)
-            if args.center_lam:
-                lam = _apply_center(lam, int(g.N_z), int(g.n_g))
-            lam_2d = lam.view(g.N_z, g.n_g)                 # (N_z, n_g)
-            final_lam_by_item.append(lam_2d.abs().mean(dim=0).cpu().numpy().tolist())
-            final_lam_std_scen.append(lam_2d.std(dim=0).cpu().numpy().tolist())
 
     # ── 8. Matrice cosine n_cosine × n_cosine ────────────────────────────────
     n_c = args.n_cosine
@@ -883,7 +977,8 @@ def main() -> None:
     model.train()
     grad_vecs: list = []
     for j, gi in enumerate(cosine_idxs):
-        gv = gradient_vector(model, graphs_dev[gi], graphs_dev[gi].c_scale.item(),
+        g  = get_graph(gi)
+        gv = gradient_vector(model, g, g.c_scale.item(),
                              do_center=args.center_lam)
         grad_vecs.append(gv)
         if (j + 1) % 5 == 0:
@@ -1039,11 +1134,13 @@ def main() -> None:
 
     # ── 10. JSON ──────────────────────────────────────────────────────────────
     ev_l1_final, ev_lam_final = eval_set()
+    total_train_time_s = time.perf_counter() - t_start
     metrics = {
         "config":               vars(args),
         "n_graphs_train":       n_total,
         "n_graphs_eval":        n_eval,
         "n_params":             n_params,
+        "total_train_time_s":   float(total_train_time_s),
         "hist_epochs":          hist_epochs,
         "eval_set": {
             "epochs":    hist_eval_epochs,
@@ -1052,6 +1149,18 @@ def main() -> None:
             "final_l1":  ev_l1_final,
             "final_lam": ev_lam_final,
         },
+        # Historique gradient norm (stabilité de l'optimisation, comparable entre configs)
+        "grad_norm_mean_hist": hist_gnorm_mean,
+        "grad_norm_max_hist":  hist_gnorm_max,
+        # Historique par N (nb de scénarios) — clé = N (str, JSON n'autorise pas les clés int)
+        "train_by_N": {
+            str(Nv): hist_by_N[Nv] for Nv in N_set
+        },
+        # Déséquilibre L1 entre groupes N par epoch (0 = tous les N appris également)
+        "l1_spread_hist":     hist_l1_spread,
+        "l1_spread_rel_hist": hist_l1_spread_rel,
+        # L1 de référence sous-gradient T=50 par instance (même référence que les "(%)" des logs)
+        "l1_ref_T50": {str(gi): v for gi, v in l1_ref.items()},
         "cosine_mean_off_diag": float(cos_off_diag),
         "cosine_matrix":        cos_mat.tolist(),
         "cosine_labels":        cos_labels,
@@ -1078,6 +1187,7 @@ def main() -> None:
             {
                 "idx":                  gi,
                 "n_orig":               n_origs[gi],
+                "N":                    N_vals[gi],
                 "depth":                depths[gi],
                 "opt_val":              opt_vals[gi],
                 "loss_hist":            hist_loss[gi],

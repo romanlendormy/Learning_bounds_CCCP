@@ -107,21 +107,16 @@ SSPCLDProblem::dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row) 
     for (int q : accepting_sorted_)
         if (dp[q] > best_val) { best_val = dp[q]; best_q = q; }
 
-    // Fallback si le DFA est vide pour ce T (même comportement que SSPShiftProblem)
+    // Aucun état acceptant atteint : ce masque (mask_row) n'admet AUCUNE
+    // séquence valide de longueur T_ pour cet employé — sous-problème
+    // réellement infaisable (pas juste "difficile"). Renvoyer NEG_INF_CLD
+    // (plutôt qu'ignorer l'automate/le masque comme avant) : toute autre
+    // valeur romprait l'exactitude requise par la borne v1CLD, cf.
+    // debug_verify_oracle. Le vecteur d'actions reste de taille T_ (valeurs
+    // arbitraires, jamais consommées puisque la valeur -inf exclut cet
+    // employé de toute sélection gloutonne en aval).
     if (best_q < 0) {
-        std::vector<int> actions(T_);
-        double val = 0.0;
-        for (int t = 0; t < T_; ++t) {
-            int    best_s = 0;
-            double best_c = cost[base + t * SIGMA_SIZE];
-            for (int s = 1; s < SIGMA_SIZE; ++s) {
-                double cv = cost[base + t * SIGMA_SIZE + s];
-                if (cv > best_c) { best_c = cv; best_s = s; }
-            }
-            actions[t] = best_s;
-            val       += best_c;
-        }
-        return {val, std::move(actions)};
+        return {NEG_INF_CLD, std::vector<int>(T_, 0)};
     }
 
     std::vector<int> actions(T_);

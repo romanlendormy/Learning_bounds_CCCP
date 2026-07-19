@@ -46,6 +46,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <numeric>
 #include <string>
@@ -63,6 +64,16 @@ static constexpr int SSP_BAB_SIGMA_W    = 3;
 //         Praticable uniquement sur de petites instances (E, T, N faibles).
 // V1CLD : ζ_{i,j} glouton O(E·T·Q) → borne plus lâche, rapide.
 enum class SSPBoundMode { V1LD, V1CLD };
+
+// ── Heuristique de branchement du BoundBrancher ──────────────────────────────
+// RATIO    : ordre data->branch_order (score demande/salaire), valeur W en
+//            premier — pensé pour épouser le raisonnement glouton de la borne.
+// SIZE_MIN : imite le brancher générique de Gecode base (INT_VAR_SIZE_MIN /
+//            INT_VAL_MIN) — domaine le plus petit d'abord (ties : index
+//            croissant e*T+t), valeur croissante en premier (0..3). Sert à
+//            isoler l'effet de l'heuristique de celui de la borne : même
+//            more()/bound_mode, mais recherche pilotée comme Gecode base.
+enum class SSPBranchHeuristic { RATIO, SIZE_MIN };
 
 // ── SSPSharedData — données partagées, construites une seule fois à la racine ─
 
@@ -83,6 +94,15 @@ struct SSPSharedData {
     IntSet work_set;
 
     std::vector<int> sal_sc;   // salary × SCALE
+    // salary_rounded[t] = sal_sc[t] / SCALE — EXPÉRIMENTAL (2026-07-09) : le
+    // modèle CP (total_cost) est construit à partir de sal_sc (arrondi au
+    // millième), mais more() passait jusqu'ici 'salary' brut (double, non
+    // arrondi) aux oracles θ/ζ — un écart systématique (~2e-4/période dans les
+    // instances observées, TOUJOURS du même signe ici) entre les deux peut
+    // suffire à ce qu'une borne duale valide (au sens du coût réel non arrondi)
+    // dépasse total_cost.max() (construit sur le coût arrondi) — test de
+    // l'hypothèse "troncature façon MKP" en passant la version arrondie ici.
+    Vec1d  salary_rounded;
     int    sal_ub  = 0;
     int    min_feas = 0;
 
@@ -99,7 +119,8 @@ struct SSPSharedData {
     // s'accorder avec le brise-symétrie lex (x[e] ≤lex x[e+1]).
     std::vector<int> branch_order;   // indices e*T+t, taille E*T
 
-    SSPBoundMode bound_mode  = SSPBoundMode::V1LD;
+    SSPBoundMode      bound_mode      = SSPBoundMode::V1LD;
+    SSPBranchHeuristic branch_heuristic = SSPBranchHeuristic::SIZE_MIN;
     int    T_root     = 200;
     int    T_node     = 30;
     double rel_tol    = 1e-4;
@@ -119,9 +140,24 @@ struct SSPSharedData {
     double time_lim = -1.0;   // -1 = illimité
     std::chrono::steady_clock::time_point t_start;
 
-    mutable int64_t more_calls        = 0;
-    mutable double  root_bound_time_s = 0.0;
-    mutable double  t_bound_total_s   = 0.0;
+    mutable int64_t more_calls         = 0;
+    mutable double  root_bound_time_s  = 0.0;
+    // Valeur de la borne inférieure (coût salarial, même échelle que objective)
+    // calculée au tout premier appel more() (racine, avant tout branchement).
+    // NaN tant qu'aucun more() n'a été exécuté (ex: use_lagrangian_bound=false).
+    mutable double  root_bound_value   = std::numeric_limits<double>::quiet_NaN();
+    mutable double  t_bound_total_s    = 0.0;
+    // Nombre de fois où la borne duale a réellement resserré total_cost
+    // (lb_int > total_cost.min() dans more()) — permet de distinguer "borne
+    // correcte mais inutile sur cette instance" de "borne qui ne se déclenche
+    // jamais" (signe possible d'un bug de calibration/signe/scale).
+    mutable int64_t bound_tightenings  = 0;
+    // Sous-ensemble de bound_tightenings où la borne est en plus strictement
+    // supérieure au MAXIMUM courant de total_cost (lb_int > total_cost.max()) :
+    // contradiction immédiate, directement imputable à la borne (pas à la
+    // propagation CP native qui tournera plus tard). Équivalent SSP de
+    // fails_from_bound dans mkp/gecode_bab.hpp (ub_int < obj.min() côté max).
+    mutable int64_t fails_from_bound   = 0;
 
     static int compute_Q(int initial_,
                           const std::vector<std::tuple<int,int,int>>& trans,
@@ -166,9 +202,11 @@ struct SSPSharedData {
           work_set(build_work_set())
     {
         sal_sc.resize(T);
+        salary_rounded.resize(T);
         for (int t = 0; t < T; ++t) {
             sal_sc[t] = static_cast<int>(std::llround(salary[t] * SCALE));
             sal_ub   += E * std::max(0, sal_sc[t]);
+            salary_rounded[t] = sal_sc[t] / static_cast<double>(SCALE);
         }
         min_feas = static_cast<int>(std::ceil((1.0 - epsilon) * N));
 
@@ -248,14 +286,25 @@ public:
             return false;
         }
 
-        // Ordre de branchement : data->branch_order (score demande/salaire par
-        // période, employé-major — cf. SSPSharedData).
+        // Ordre de branchement : RATIO suit data->branch_order (score demande/
+        // salaire, employé-major) ; SIZE_MIN imite INT_VAR_SIZE_MIN de Gecode
+        // base (domaine le plus petit d'abord, ties par index croissant).
         Choice* choice(Space& home) override {
-            const auto& order = static_cast<SSPSpaceBnB&>(home).data->branch_order;
-            for (int idx : order)
-                if (!vars[idx].assigned()) return new PosVal(*this, idx);
-            GECODE_NEVER;
-            return nullptr;
+            const auto* data = static_cast<SSPSpaceBnB&>(home).data;
+            if (data->branch_heuristic == SSPBranchHeuristic::RATIO) {
+                for (int idx : data->branch_order)
+                    if (!vars[idx].assigned()) return new PosVal(*this, idx);
+                GECODE_NEVER;
+                return nullptr;
+            }
+            int best = -1, best_size = std::numeric_limits<int>::max();
+            for (int i = 0; i < vars.size(); ++i) {
+                if (vars[i].assigned()) continue;
+                int sz = vars[i].size();
+                if (sz < best_size) { best_size = sz; best = i; }
+            }
+            if (best < 0) GECODE_NEVER;
+            return new PosVal(*this, best);
         }
 
         Choice* choice(const Space&, Archive& e) override {
@@ -263,30 +312,43 @@ public:
             return new PosVal(*this, pos);
         }
 
-        // Essaie toujours W en premier (mime le tri glouton par delta de
-        // solve_zeta_masked). use_lagrangian_bound=false : on fixe quand même
-        // la variable (même arbre), mais on n'appelle jamais more() — isole
-        // l'effet de la borne à heuristique et moteur de recherche fixés.
+        // RATIO : essaie toujours W en premier (mime le tri glouton par delta
+        // de solve_zeta_masked). SIZE_MIN : valeur croissante en premier,
+        // comme INT_VAL_MIN de Gecode base. use_lagrangian_bound=false : on
+        // fixe quand même la variable (même arbre), mais on n'appelle jamais
+        // more() — isole l'effet de la borne à heuristique et moteur de
+        // recherche fixés.
         ExecStatus commit(Space& home, const Choice& c, unsigned int a) override {
             const PosVal& pv = static_cast<const PosVal&>(c);
             auto& space = static_cast<SSPSpaceBnB&>(home);
-            static const int VALUE_ORDER[SSP_BAB_SIGMA_SIZE] = {
+            static const int VALUE_ORDER_RATIO[SSP_BAB_SIGMA_SIZE] = {
                 SSP_BAB_SIGMA_W, 0, 1, 2
             };
-            ExecStatus es = me_failed(vars[pv.pos].eq(home, VALUE_ORDER[a]))
+            static const int VALUE_ORDER_SIZE_MIN[SSP_BAB_SIGMA_SIZE] = {
+                0, 1, 2, SSP_BAB_SIGMA_W
+            };
+            const int* value_order = (space.data->branch_heuristic == SSPBranchHeuristic::RATIO)
+                                      ? VALUE_ORDER_RATIO : VALUE_ORDER_SIZE_MIN;
+            ExecStatus es = me_failed(vars[pv.pos].eq(home, value_order[a]))
                             ? ES_FAILED : ES_OK;
             if (es == ES_OK && space.data->use_lagrangian_bound)
                 space.more();
             return es;
         }
 
-        void print(const Space&, const Choice& c, unsigned int a,
+        void print(const Space& home, const Choice& c, unsigned int a,
                    std::ostream& os) const override {
             const PosVal& pv = static_cast<const PosVal&>(c);
-            static const int VALUE_ORDER[SSP_BAB_SIGMA_SIZE] = {
+            static const int VALUE_ORDER_RATIO[SSP_BAB_SIGMA_SIZE] = {
                 SSP_BAB_SIGMA_W, 0, 1, 2
             };
-            os << "x_flat[" << pv.pos << "] = " << VALUE_ORDER[a];
+            static const int VALUE_ORDER_SIZE_MIN[SSP_BAB_SIGMA_SIZE] = {
+                0, 1, 2, SSP_BAB_SIGMA_W
+            };
+            const auto& data = static_cast<const SSPSpaceBnB&>(home).data;
+            const int* value_order = (data->branch_heuristic == SSPBranchHeuristic::RATIO)
+                                      ? VALUE_ORDER_RATIO : VALUE_ORDER_SIZE_MIN;
+            os << "x_flat[" << pv.pos << "] = " << value_order[a];
         }
     };
 
@@ -418,7 +480,7 @@ public:
 
         if (data->bound_mode == SSPBoundMode::V1LD) {
             SSPProblemBnB prob(data->transitions, data->accepting, data->initial,
-                                data->salary, data->demand, data->p, data->epsilon,
+                                data->salary_rounded, data->demand, data->p, data->epsilon,
                                 E, mask);
             V1LDResult res = solve_v1ld(prob, T_iters, 0, false, remaining,
                                         data->rel_tol, data->tol_window, -1e18,
@@ -427,7 +489,7 @@ public:
             dual_val    = res.v1LD_star;
         } else {
             SSPCLDProblemBnB prob(data->transitions, data->accepting, data->initial,
-                                   data->salary, data->demand, data->p, data->epsilon,
+                                   data->salary_rounded, data->demand, data->p, data->epsilon,
                                    E, mask);
             V1CLDResult res = solve_v1cld(prob, T_iters, 0, false, remaining,
                                           data->rel_tol, data->tol_window, -1e18,
@@ -438,7 +500,10 @@ public:
 
         double elapsed = std::chrono::duration<double>(Clock::now() - bound_t0).count();
         data->t_bound_total_s += elapsed;
-        if (is_first) data->root_bound_time_s = elapsed;
+        if (is_first) {
+            data->root_bound_time_s = elapsed;
+            data->root_bound_value  = -dual_val;  // borne au nœud racine, convention coût réel
+        }
         lambda_warmed = true;
 
         // dual_val est en convention max(−salaire) → borne inf. sur le coût salarial réel.
@@ -446,8 +511,56 @@ public:
         const double lb_salary = -dual_val;
         const int    lb_int    = static_cast<int>(std::floor(lb_salary * SSPSharedData::SCALE));
 
-        if (lb_int > total_cost.min())
+        // DEBUG TEMPORAIRE — lb_int ne peut JAMAIS dépasser sal_ub (coût si tous
+        // les employés travaillent toutes les périodes), quel que soit le nœud/masque :
+        // c'est un plafond universel sur toute solution faisable, donc aussi sur
+        // toute borne inférieure valide. Un dépassement ici est un certificat
+        // direct d'invalidité (pas besoin de connaître la solution optimale).
+        // Élargi (2026-07-09) : déclenche aussi sur lb_int > total_cost.max()
+        // (= fails_from_bound, contradiction avec le domaine COURANT, rétréci
+        // par l'incumbent Gecode) — pas seulement le plafond universel sal_ub.
+        // Nécessaire pour capturer des runs (ex: v1LD, T_root/T_node petits)
+        // où le sous-gradient diverge moins fort et ne dépasse jamais sal_ub,
+        // mais où la borne est quand même invalide localement.
+        const bool exceeds_sal_ub  = lb_int > data->sal_ub;
+        const bool exceeds_cur_max = lb_int > total_cost.max();
+        if (getenv("SSP_DEBUG_BOUND") && (exceeds_sal_ub || exceeds_cur_max)) {
+            std::cerr << "*** BORNE INVALIDE ["
+                      << (data->bound_mode == SSPBoundMode::V1LD ? "V1LD" : "V1CLD")
+                      << (exceeds_sal_ub ? "/sal_ub" : "/cur_max")
+                      << "] : lb_int=" << lb_int
+                      << " > sal_ub=" << data->sal_ub
+                      << " (total_cost.max()=" << total_cost.max() << ")"
+                      << "  (more_calls=" << data->more_calls
+                      << ", lb_salary=" << lb_salary << ") ***\n";
+            const char* dump_path = getenv("SSP_DEBUG_DUMP");
+            if (dump_path && !std::ifstream(dump_path).good()) {
+                std::ofstream f(dump_path);
+                f << "mask\n";
+                for (int e = 0; e < E; ++e) {
+                    for (int t = 0; t < T; ++t) f << mask[e][t] << " ";
+                    f << "\n";
+                }
+                f << "lambda_mode " << (data->bound_mode == SSPBoundMode::V1LD ? "ld" : "cld") << "\n";
+                if (data->bound_mode == SSPBoundMode::V1LD) {
+                    f << "lambda_v1ld " << lambda_v1ld.size() << " " << (lambda_v1ld.empty() ? 0 : lambda_v1ld[0].size()) << "\n";
+                    for (auto& row : lambda_v1ld) { for (double v : row) f << v << " "; f << "\n"; }
+                } else {
+                    f << "lambda_v1cld " << lambda_v1cld.size() << " "
+                      << (lambda_v1cld.empty() ? 0 : lambda_v1cld[0].size()) << " "
+                      << (lambda_v1cld.empty() || lambda_v1cld[0].empty() ? 0 : lambda_v1cld[0][0].size()) << "\n";
+                    for (auto& mat : lambda_v1cld)
+                        for (auto& row : mat) { for (double v : row) f << v << " "; f << "\n"; }
+                }
+            }
+        }
+
+        if (lb_int > total_cost.min()) {
+            data->bound_tightenings++;
+            if (lb_int > total_cost.max())
+                data->fails_from_bound++;
             rel(*this, total_cost >= lb_int);
+        }
     }
 };
 
@@ -459,6 +572,7 @@ struct GecodeSSPBabResult {
     bool        feasible;
     double      solve_time_s;
     double      root_bound_time_s;
+    double      root_bound_value;   // NaN si use_lagrangian_bound=false (pas de borne)
     double      t_bound_total_s;
     double      t_bab_pure_s;      // = solve_time_s - t_bound_total_s
     int64_t     nodes;
@@ -466,6 +580,8 @@ struct GecodeSSPBabResult {
     int64_t     depth;
     int64_t     incumbent_improvements;
     int64_t     more_calls;
+    int64_t     bound_tightenings;   // cf. SSPSharedData::bound_tightenings
+    int64_t     fails_from_bound;    // cf. SSPSharedData::fails_from_bound
     std::string status;
 };
 
@@ -490,4 +606,5 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     SSPBoundMode bound_mode           = SSPBoundMode::V1LD,
     double       rel_tol              = 1e-4,
     int          tol_window           = 30,
-    bool         use_lagrangian_bound = true);
+    bool         use_lagrangian_bound = true,
+    SSPBranchHeuristic branch_heuristic = SSPBranchHeuristic::SIZE_MIN);
