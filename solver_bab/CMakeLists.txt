@@ -124,6 +124,7 @@ add_executable(bab_mkp_gecode
     mkp/gecode_bab_gnn_batched.cpp
     mkp/gnn_sd_edit_native_batched.cpp
     mkp/gnn_sd_edit_native_aoti_batched.cpp
+    mkp/gnn_sd_edit_native_aoti_batched_static.cpp
     ${GNN_NATIVE_SOURCES}
 )
 
