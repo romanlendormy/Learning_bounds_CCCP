@@ -27,6 +27,8 @@
 #include "gecode_bab.hpp"
 #include "gnn_sd_edit_native_batched.hpp"
 
+#include <limits>
+
 // ═════════════════════════════════════════════════════════════════════════════
 // MKPSpaceGNNBatched — espace de recherche Gecode, borne calculée EXTERNEMENT
 // ═════════════════════════════════════════════════════════════════════════════
@@ -228,6 +230,17 @@ struct GNNBatchedBabResult : public GecodeV1LDResult {
     // que ce n'était pas leur tour dans le cycle de stride. 0 si
     // gnn_node_stride <= 1 (comportement historique, jamais de bypass).
     int64_t nodes_bypassed_stride = 0;
+    // Borne GNN au premier niveau réellement calculé (enfants directs de la
+    // racine, gnn_depth==1) — la racine elle-même n'a jamais de borne GNN
+    // dans ce moteur (cf. commentaire "Racine" dans gecode_bab_gnn_batched.cpp).
+    // Sert de proxy pour le "gap à la racine" rapporté par les modes gnn/
+    // gnn_root (bound_mode != gnn_batched) : max(ub) sur les membres de ce
+    // premier bucket flushé à gnn_depth==1 (au plus 2 : les deux enfants du
+    // branchement racine), car UB(racine) = max_i UB(enfant_i) pour une
+    // relaxation admissible. NaN si jamais capturé (n<=1 ou bucket vidé sans
+    // flush avant timeout).
+    double  first_level_bound_value      = std::numeric_limits<double>::quiet_NaN();
+    int64_t first_level_bound_n_members  = 0;
 };
 
 // gnn_max_depth_frac : symétrique de MKPSharedData::gnn_max_depth_frac
@@ -263,9 +276,18 @@ struct GNNBatchedBabResult : public GecodeV1LDResult {
 // "native_aoti" (AOTInductor, GNNSdEditNativeAOTIBatched — cf.
 // gnn_sd_edit_native_aoti_batched.hpp) : un artefact .pt2 par n_g, B
 // dynamique à l'intérieur (feasibility validée le 2026-07-17, cf.
-// gnn_sd_edit/probe_aoti_batched_dynamic_B.py). Même contrat query_batch
-// (GNNBoundBackendBatch), résultats numériquement équivalents (~1e-5, pas
-// bit-identiques comme bnb/surrogate — Inductor recompile les kernels).
+// gnn_sd_edit/probe_aoti_batched_dynamic_B.py) — MAIS bug compilateur
+// CUDA/Inductor non résolu sur cette voie (device-side assert, cf. mémoire
+// "aoti-batched-gru-decomposed-abandoned"), NE PAS UTILISER EN PRODUCTION.
+// "native_aoti_static" (AOTInductor, GNNSdEditNativeAOTIStaticBatched — cf.
+// gnn_sd_edit_native_aoti_batched_static.hpp) : même principe mais B FIGÉ =
+// K à l'export (un artefact par n_g, compilé pour EXACTEMENT K graphes),
+// contourne le bug ci-dessus ; tout bucket partiel est complété par du
+// padding avant l'appel (coût : calcul gaspillé proportionnel à
+// (K-B_réel)/K, négligeable si les buckets sont presque toujours pleins).
+// Même contrat query_batch (GNNBoundBackendBatch), résultats numériquement
+// équivalents (~1e-5, pas bit-identiques comme bnb/surrogate — Inductor
+// recompile les kernels).
 GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p, const Vec3d& A, const Vec2d& b,

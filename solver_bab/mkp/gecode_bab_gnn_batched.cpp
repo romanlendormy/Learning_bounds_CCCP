@@ -21,6 +21,7 @@
 
 #include "gecode_bab_gnn_batched.hpp"
 #include "gnn_sd_edit_native_aoti_batched.hpp"
+#include "gnn_sd_edit_native_aoti_batched_static.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -134,10 +135,17 @@ GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
     else if (gnn_backend == "native_aoti")
         gnn_client = std::make_unique<GNNSdEditNativeAOTIBatched>(
             gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b, use_surrogate_zeta);
+    else if (gnn_backend == "native_aoti_static")
+        // B FIGÉ = K à l'export (cf. gnn_sd_edit_native_aoti_batched_static.hpp) :
+        // contourne le bug compilateur CUDA/Inductor rencontré avec B
+        // dynamique (native_aoti), au prix d'un padding jusqu'à K sur tout
+        // bucket partiel.
+        gnn_client = std::make_unique<GNNSdEditNativeAOTIStaticBatched>(
+            gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b, K, use_surrogate_zeta);
     else
         throw std::invalid_argument(
             "solve_gecode_bab_mkp_gnn_batched : gnn_backend inconnu (\"" + gnn_backend +
-            "\"), attendu \"native\" ou \"native_aoti\"");
+            "\"), attendu \"native\", \"native_aoti\" ou \"native_aoti_static\"");
 
     auto time_ok = [&]() {
         if (time_lim <= 0.0) return true;
@@ -154,6 +162,13 @@ GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
 
     int64_t n_bucket_flushes = 0, sum_bucket_fill_at_flush = 0, max_pending_live = 0;
     double t_gnn_graph_build_s = 0.0, t_gnn_forward_s = 0.0, t_gnn_bound_compute_s = 0.0;
+
+    // Proxy "gap à la racine" (cf. doc GNNBatchedBabResult::first_level_bound_value) :
+    // capturé au premier flush du bucket gnn_depth==1 (enfants directs de la
+    // racine — au plus 2, jamais plus, ce bucket ne peut être réalimenté).
+    double  first_level_bound_value     = std::numeric_limits<double>::quiet_NaN();
+    int64_t first_level_bound_n_members = 0;
+    bool    first_level_captured        = false;
 
     auto count_pending_live = [&]() {
         int64_t total = 0;
@@ -192,9 +207,15 @@ GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
         double best_leaf_val = -std::numeric_limits<double>::infinity();
         MKPSpaceGNNBatched* best_leaf_space = nullptr;
 
+        // Capture le proxy "gap à la racine" sur CE flush si c'est le premier
+        // (et unique — ce bucket ne peut être réalimenté) flush à gnn_depth==1.
+        const bool capture_first_level = (gnn_depth == 1 && !first_level_captured);
+        double first_level_max_ub = -std::numeric_limits<double>::infinity();
+
         for (int i = 0; i < B; ++i) {
             MKPSpaceGNNBatched* sp = bucket[i].space;
             double ub = bucket[i].fp + ub_relative[i];
+            if (capture_first_level) first_level_max_ub = std::max(first_level_max_ub, ub);
 
             // Debug : trace nœud par nœud (diagnostic bug faux-optimal batché,
             // cf. mémoire "gnn_batched_robustness_sweep_result") — même format
@@ -228,6 +249,12 @@ GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
             open.push_back({cub, bucket[i].outer_depth, sp});
         }
         bucket.clear();
+
+        if (capture_first_level && B > 0) {
+            first_level_bound_value     = first_level_max_ub;
+            first_level_bound_n_members = B;
+            first_level_captured        = true;
+        }
 
         if (best_leaf_space) {
             if (best_leaf_val > best_val + 1e-9) {
@@ -375,6 +402,8 @@ GNNBatchedBabResult solve_gecode_bab_mkp_gnn_batched(
     res.max_pending_live = max_pending_live;
     res.nodes_bypassed_depth_cutoff = nodes_bypassed_depth_cutoff;
     res.nodes_bypassed_stride = nodes_bypassed_stride;
+    res.first_level_bound_value     = first_level_bound_value;
+    res.first_level_bound_n_members = first_level_bound_n_members;
 
     res.greedy_value = greedy_val;
     res.solve_time_s = elapsed;

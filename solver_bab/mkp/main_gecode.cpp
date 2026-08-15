@@ -12,6 +12,7 @@
 #include "gecode_bab.hpp"
 #include "gecode_bab_gnn_batched.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -168,9 +169,11 @@ int main(int argc, char* argv[])
     // (comportement historique). Argument 22.
     int         gnn_node_stride = (argc > 21) ? std::stoi(argv[21]) : 1;
     // gnn_batched_backend : mode gnn_batched uniquement — "native" (défaut,
-    // TorchScript, GNNSdEditNativeBatched) ou "native_aoti" (AOTInductor,
-    // GNNSdEditNativeAOTIBatched, cf. gnn_sd_edit_native_aoti_batched.hpp).
-    // Argument 23.
+    // TorchScript, GNNSdEditNativeBatched), "native_aoti" (AOTInductor B
+    // dynamique, ABANDONNÉ — bug compilateur CUDA/Inductor, cf. mémoire
+    // "aoti-batched-gru-decomposed-abandoned") ou "native_aoti_static"
+    // (AOTInductor B figé = K, contourne ce bug, cf.
+    // gnn_sd_edit_native_aoti_batched_static.hpp). Argument 23.
     std::string gnn_batched_backend = (argc > 22) ? argv[22] : "native";
 
     if (mode_str == "gnn_batched" && gnn_checkpoint.empty()) {
@@ -229,6 +232,17 @@ int main(int argc, char* argv[])
         std::cout << std::fixed << std::setprecision(4);
         std::cout << "  Statut                    : " << res.status    << "\n";
         std::cout << "  Valeur optimale           : " << res.objective << "\n";
+        if (std::isnan(res.first_level_bound_value)) {
+            std::cout << "  Borne GNN 1er niveau      : N/A (jamais flushée avant timeout)\n";
+        } else {
+            std::cout << "  Borne GNN 1er niveau      : " << res.first_level_bound_value
+                       << "  (proxy \"gap racine\" : enfants directs de la racine, "
+                       << res.first_level_bound_n_members << " membre(s) ; PAS la racine "
+                       << "elle-même, cf. doc GNNBatchedBabResult::first_level_bound_value)"
+                       << "  (gap vs optimal : " << std::setprecision(2)
+                       << (res.objective > 0 ? 100.0 * (res.first_level_bound_value - res.objective) / res.objective : 0.0)
+                       << "%)\n" << std::setprecision(4);
+        }
         std::cout << "  Incumbent initial (greedy): " << res.greedy_value << "\n\n";
 
         std::cout << std::setprecision(0);
