@@ -11,6 +11,7 @@
 
 #include "gecode_bab.hpp"
 #include "gecode_bab_gnn_batched.hpp"
+#include "gecode_bab_v1cld_gnn_batched.hpp"
 
 #include <cmath>
 #include <fstream>
@@ -90,8 +91,10 @@ int main(int argc, char* argv[])
     // mais calculée par LOTS de K nœuds en un seul forward — cf.
     // gecode_bab_gnn_batched.hpp, validé sur le sweep de robustesse job
     // 16406490 : mêmes optimaux que REF/gnn sur tout n∈{10,20}×N∈{20,50,100,500})
-    // ou "ref" (squelette V1LD nu, sans borne — référence pour isoler l'effet
-    // du branchement/incumbent/moteur DFS de l'effet de la borne elle-même).
+    // "gnn_batched_v1cld" (équivalent V1CLD de gnn_batched — cf.
+    // gecode_bab_v1cld_gnn_batched.hpp, backend natif uniquement) ou "ref"
+    // (squelette V1LD nu, sans borne — référence pour isoler l'effet du
+    // branchement/incumbent/moteur DFS de l'effet de la borne elle-même).
     std::string mode_str    = (argc > 7) ? argv[7] : "v1ld";
     BoundMode   bound_mode  = (mode_str == "v1cld")    ? BoundMode::V1CLD
                             : (mode_str == "gnn")      ? BoundMode::GNN
@@ -176,13 +179,13 @@ int main(int argc, char* argv[])
     // gnn_sd_edit_native_aoti_batched_static.hpp). Argument 23.
     std::string gnn_batched_backend = (argc > 22) ? argv[22] : "native";
 
-    if (mode_str == "gnn_batched" && gnn_checkpoint.empty()) {
-        std::cerr << "Erreur : mode=gnn_batched requiert un chemin de checkpoint "
+    if ((mode_str == "gnn_batched" || mode_str == "gnn_batched_v1cld") && gnn_checkpoint.empty()) {
+        std::cerr << "Erreur : mode=" << mode_str << " requiert un chemin de checkpoint "
                      "(argument 10) — usage :\n"
                      "  bab_mkp_gecode <dataset> [eps] [T_node] [time_lim] [rep] [T_root] "
-                     "gnn_batched <ckpt.pt> [device=cpu] [-] [-] [-] [-] [-] [-] [K=64] "
+                     "gnn_batched|gnn_batched_v1cld <ckpt.pt> [device=cpu] [-] [-] [-] [-] [-] [-] [K=64] "
                      "[gnn_max_depth_frac=1.0]\n"
-                     "  (arguments 12-17 ignorés en mode gnn_batched : pas d'IPC, pas de "
+                     "  (arguments 12-17 ignorés en mode gnn_batched/gnn_batched_v1cld : pas d'IPC, pas de "
                      "variante autre que sd_edit, pas de gating profondeur/gap min)\n";
         return 1;
     }
@@ -222,6 +225,95 @@ int main(int argc, char* argv[])
         std::cout << "───────────────────────────────────────────────────\n";
 
         GNNBatchedBabResult res = solve_gecode_bab_mkp_gnn_batched(
+            inst.n, inst.m, inst.N, epsilon, inst.c, inst.p, inst.A, inst.b,
+            time_limit, gnn_batched_K, gnn_checkpoint, gnn_device, gnn_batched_max_depth_frac,
+            use_surrogate_zeta, gnn_node_stride, gnn_batched_backend);
+
+        std::cout << "\n═══════════════════════════════════════════════════\n";
+        std::cout << "  RÉSULTATS\n";
+        std::cout << "═══════════════════════════════════════════════════\n";
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "  Statut                    : " << res.status    << "\n";
+        std::cout << "  Valeur optimale           : " << res.objective << "\n";
+        if (std::isnan(res.first_level_bound_value)) {
+            std::cout << "  Borne GNN 1er niveau      : N/A (jamais flushée avant timeout)\n";
+        } else {
+            std::cout << "  Borne GNN 1er niveau      : " << res.first_level_bound_value
+                       << "  (proxy \"gap racine\" : enfants directs de la racine, "
+                       << res.first_level_bound_n_members << " membre(s) ; PAS la racine "
+                       << "elle-même, cf. doc GNNBatchedBabResult::first_level_bound_value)"
+                       << "  (gap vs optimal : " << std::setprecision(2)
+                       << (res.objective > 0 ? 100.0 * (res.first_level_bound_value - res.objective) / res.objective : 0.0)
+                       << "%)\n" << std::setprecision(4);
+        }
+        std::cout << "  Incumbent initial (greedy): " << res.greedy_value << "\n\n";
+
+        std::cout << std::setprecision(0);
+        std::cout << "  Nœuds                     : " << res.nodes << "\n";
+        std::cout << "  Échecs totaux             : " << res.fails << "\n";
+        std::cout << "  Améliorations incumbent   : " << res.incumbent_improvements << "\n\n";
+
+        std::cout << "  Flushes de bucket         : " << res.n_bucket_flushes << "\n";
+        std::cout << std::setprecision(2);
+        std::cout << "  Remplissage moyen au flush: " << res.mean_bucket_fill_at_flush
+                  << " / K=" << gnn_batched_K << "\n";
+        std::cout << std::setprecision(0);
+        std::cout << "  Pic de nœuds en attente   : " << res.max_pending_live << "\n";
+        if (gnn_batched_max_depth_frac < 1.0)
+            std::cout << "  Bypass (depth>seuil)      : " << res.nodes_bypassed_depth_cutoff << "\n";
+        if (gnn_node_stride > 1)
+            std::cout << "  Bypass (stride)           : " << res.nodes_bypassed_stride << "\n";
+        std::cout << "\n";
+
+        std::cout << std::setprecision(3);
+        std::cout << "  Temps total               : " << res.solve_time_s << " s\n";
+        std::cout << "  Temps borne (GNN batché)  : " << res.t_bound_total_s << " s"
+                  << "  (" << std::setprecision(1) << std::fixed
+                  << (res.solve_time_s > 0 ? 100.0 * res.t_bound_total_s / res.solve_time_s : 0.0)
+                  << "% du total)\n" << std::setprecision(3);
+        std::cout << "    dont construction graphe: " << res.t_gnn_graph_build_s << " s\n";
+        std::cout << "    dont forward GNN        : " << res.t_gnn_forward_s << " s\n";
+        std::cout << "    dont calcul borne (ζ)   : " << res.t_gnn_bound_compute_s << " s\n";
+        std::cout << "  Temps BAB pur             : " << res.t_bab_pure_s << " s\n";
+        if (res.nodes > 0)
+            std::cout << "  Temps moyen par nœud      : "
+                      << (res.solve_time_s / res.nodes * 1000.0) << " ms\n";
+        std::cout << "═══════════════════════════════════════════════════\n";
+
+        return 0;
+    }
+
+    // ── mode=gnn_batched_v1cld : équivalent V1CLD de gnn_batched ci-dessus —
+    // même moteur DFS+bucketing (solve_gecode_bab_mkp_v1cld_gnn_batched,
+    // gecode_bab_v1cld_gnn_batched.hpp), même CLI, seul le backend GNN et la
+    // borne changent (ζ_{i,j} par (scénario,contrainte) au lieu de ζ_i par
+    // scénario). Seul gnn_batched_backend="native" supporté (pas d'AOTInductor
+    // V1CLD pour l'instant, cf. doc de header).
+    if (mode_str == "gnn_batched_v1cld") {
+        if (gnn_batched_backend != "native") {
+            std::cerr << "Erreur : mode=gnn_batched_v1cld ne supporte que "
+                         "gnn_batched_backend=native pour l'instant (reçu \""
+                      << gnn_batched_backend << "\")\n";
+            return 1;
+        }
+
+        std::cout << "═══════════════════════════════════════════════════\n";
+        std::cout << "  CCMKP — Gecode BAB + borne V1CLD GNN BATCHÉE (K=" << gnn_batched_K
+                  << ", sd_edit, " << gnn_batched_backend << ")\n";
+        std::cout << "═══════════════════════════════════════════════════\n";
+        std::cout << "  Fichier : " << dataset << "\n";
+        std::cout << "  n="   << inst.n << "  m=" << inst.m
+                  << "  N="   << inst.N << "  ε=" << epsilon
+                  << "  rep=" << replication << "\n";
+        std::cout << "  time_limit=" << time_limit << "s  device=" << gnn_device
+                  << "  K=" << gnn_batched_K
+                  << (gnn_batched_max_depth_frac < 1.0 ? ("  gnn_max_depth_frac=" + std::to_string(gnn_batched_max_depth_frac)) : "")
+                  << (use_surrogate_zeta ? "  zeta_method=surrogate" : "")
+                  << (gnn_node_stride > 1 ? ("  gnn_node_stride=" + std::to_string(gnn_node_stride)) : "")
+                  << "\n";
+        std::cout << "───────────────────────────────────────────────────\n";
+
+        GNNBatchedBabResult res = solve_gecode_bab_mkp_v1cld_gnn_batched(
             inst.n, inst.m, inst.N, epsilon, inst.c, inst.p, inst.A, inst.b,
             time_limit, gnn_batched_K, gnn_checkpoint, gnn_device, gnn_batched_max_depth_frac,
             use_surrogate_zeta, gnn_node_stride, gnn_batched_backend);

@@ -4,6 +4,15 @@
 #include <algorithm>
 #include <cmath>
 
+// SCALE=10000 — même valeur que MKPSharedData::SCALE (solver_bab/mkp/gecode_bab.hpp:162),
+// dupliquée ici car solver_generic ne dépend pas de solver_bab. Nécessaire pour
+// que la DP indexe sur des poids/capacités entiers SANS perte : les instances
+// sont générées avec round(v, 4) (generate_song_tempfile), donc tout multiple de
+// 10000 est exact. Un round() brut sur le float (sans ce scaling, comme avant)
+// tronquait les décimales et pouvait faire diverger ζ_{i,j} de la valeur exacte
+// du B&B.
+static constexpr int SCALE = 10000;
+
 MKPCLDProblemDP::MKPCLDProblemDP(Vec1d c, Vec1d p, Vec3d A, Vec2d b, double epsilon)
     : MKPCLDProblem(std::move(c), std::move(p), std::move(A), std::move(b), epsilon)
 {
@@ -11,10 +20,17 @@ MKPCLDProblemDP::MKPCLDProblemDP(Vec1d c, Vec1d p, Vec3d A, Vec2d b, double epsi
     // i.e., (n+1) × (W_max+1), en utilisant stride = W_max+1.
     // On utilisera ensuite stride = B+1 au moment de l'appel pour éviter
     // les cache-misses quand B << W_max.
+    // ATTENTION : avec SCALE=10000, W_max_ peut devenir énorme sur des
+    // capacités b_j réalistes (ex. b_j~3771 -> W_max_~3.77e7) — la table
+    // dp_buf_ ((n+1)×(W_max_+1) doubles) peut alors atteindre plusieurs Go.
+    // Risque de complexité assumé, à mesurer par bench_v1cld_subproblems —
+    // pas corrigé ici (le but est justement de le quantifier).
     W_max_ = 0;
     for (int i = 0; i < N_; ++i)
         for (int j = 0; j < m_; ++j)
-            W_max_ = std::max(W_max_, static_cast<int>(std::round(b_[i][j])));
+            // floor, pas round : même convention que b_int dans MKPSharedData
+            // (gecode_bab.hpp:350) — ne jamais SURESTIMER la capacité scalée.
+            W_max_ = std::max(W_max_, static_cast<int>(std::floor(b_[i][j] * SCALE)));
 
     // Réserve le buffer pour la plus grande table possible.
     // La réallocation n'aura jamais lieu si toutes les capacités ≤ W_max_.
@@ -45,11 +61,11 @@ MKPCLDProblemDP::solve_zeta(int i, int j, const Vec1d& cost) const
     int ni = static_cast<int>(items.size());
     if (ni == 0) return {val_free, std::move(x)};
 
-    int B = std::max(0, static_cast<int>(std::round(b_j)));
+    int B = std::max(0, static_cast<int>(std::floor(b_j * SCALE)));
 
     std::vector<int> w(ni);
     for (int ii = 0; ii < ni; ++ii)
-        w[ii] = static_cast<int>(std::round(a_row[items[ii]]));
+        w[ii] = static_cast<int>(std::llround(a_row[items[ii]] * SCALE));
 
     // Buffer avec stride = B+1 (compact, cache-friendly).
     // Ne réalloue que si la table courante est plus grande que toutes

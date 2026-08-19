@@ -98,7 +98,20 @@ V1CLDResult solve_v1cld(
     int   iters_run = 0;
 
     // Buffers réutilisés à chaque itération
-    Vec1d Lambda_sum(d);
+    // FIX (2026-08-13) : Lambda_sum_i PAR SCENARIO (N x d) au lieu d'un seul
+    // vecteur global (d). Le centrage global (Sum_{i,j} lambda[i][j] = 0)
+    // n'annule le terme libre en X_bar que de façon AGREGEE sur tous les
+    // scenarios a la fois -- pas scenario par scenario. Or l'inegalite de
+    // dualite faible theta_i(0) <= mean_j theta_ij(lambda) (et l'analogue
+    // pour zeta_i) exige Sum_j lambda[i][j] = 0 POUR CHAQUE i separement.
+    // Sans ca, rien ne garantit theta_i(0)/zeta_i(0) <= la valeur agregee
+    // utilisee dans L1 -- c'est la cause racine de l'invalidite documentee
+    // dans ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound/README.md
+    // (le meme calcul, partage entre MKP et SSP via V1CLDProblem). Preuve
+    // complete et verification empirique (10+ instances SSP, recherche B&B
+    // complete comparee a la reference exacte) : cf.
+    // PREUVE_v1CLD_centrage_par_scenario.md (racine du depot).
+    Vec2d Lambda_sum_i(N, Vec1d(d));
     Vec1d cost_ij(d);
 
     // θ_{i,j}, δ_{i,j}, x_{i,j} et x_{i,j}^ζ (N × m × d)
@@ -113,21 +126,22 @@ V1CLDResult solve_v1cld(
 
     for (int t = 0; t < T; ++t) {
 
-        // ── (A) Λ_sum = Σ_{i,j} λ_{i,j} ─────────────────────────────────────
-        std::fill(Lambda_sum.begin(), Lambda_sum.end(), 0.0);
-        for (int i = 0; i < N; ++i)
+        // ── (A) Λ_sum_i = Σ_j λ_{i,j}  (PAR SCENARIO, pas global) ────────────
+        for (int i = 0; i < N; ++i) {
+            std::fill(Lambda_sum_i[i].begin(), Lambda_sum_i[i].end(), 0.0);
             for (int j = 0; j < m; ++j)
                 for (int k = 0; k < d; ++k)
-                    Lambda_sum[k] += lam[i][j][k];
+                    Lambda_sum_i[i][k] += lam[i][j][k];
+        }
 
         // ── (B) Sous-problèmes θ_{i,j} et ζ_{i,j} ───────────────────────────
         for (int i = 0; i < N; ++i) {
             const double p_ij = p[i] * inv_m;
             for (int j = 0; j < m; ++j) {
 
-                // cost_{i,j} = c + λ_{i,j}/p_{i,j} − Λ_sum
+                // cost_{i,j} = c + λ_{i,j}/p_{i,j} − Λ_sum_i/p_i  (centrage par scenario)
                 for (int k = 0; k < d; ++k)
-                    cost_ij[k] = c[k] + lam[i][j][k] / p_ij - Lambda_sum[k];
+                    cost_ij[k] = c[k] + lam[i][j][k] / p_ij - Lambda_sum_i[i][k] / p[i];
 
                 // θ_{i,j} : max sur le domaine de base, sans contrainte j
                 auto [vt, xt] = problem.solve_theta(j, cost_ij);

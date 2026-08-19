@@ -125,6 +125,8 @@ add_executable(bab_mkp_gecode
     mkp/gnn_sd_edit_native_batched.cpp
     mkp/gnn_sd_edit_native_aoti_batched.cpp
     mkp/gnn_sd_edit_native_aoti_batched_static.cpp
+    mkp/gecode_bab_v1cld_gnn_batched.cpp
+    mkp/gnn_v1cld_sd_edit_native_batched.cpp
     ${GNN_NATIVE_SOURCES}
 )
 
@@ -180,6 +182,7 @@ target_compile_definitions(bab_mkp_gecode_bucketed PRIVATE _GLIBCXX_USE_CXX11_AB
 target_link_libraries(bab_mkp_gecode_bucketed PRIVATE
     v1ld_generic_core
     ortools::ortools
+    OpenMP::OpenMP_CXX
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
@@ -221,6 +224,80 @@ target_link_libraries(bab_mkp_gecode_gnn_batched PRIVATE
 )
 
 target_compile_options(bab_mkp_gecode_gnn_batched PRIVATE -O3 -march=native)
+
+# ── Exécutable bab_mkp_gecode_v1cld_gnn_batched (équivalent V1CLD de
+#    bab_mkp_gecode_gnn_batched — cf. gecode_bab_v1cld_gnn_batched.hpp/.cpp,
+#    port quasi-verbatim du driver DFS+bucketing, seul le backend GNN change) ─
+# NE compile PAS gecode_bab.cpp/gecode_bab_gnn_batched.cpp (greedy_mkp dupliqué
+# localement dans gecode_bab_v1cld_gnn_batched.cpp, même convention que
+# bab_mkp_gecode_gnn_batched) — a quand même besoin de LibTorch/OpenMP
+# (GNNV1CLDSdEditNativeBatched) + Gecode.
+add_executable(bab_mkp_gecode_v1cld_gnn_batched
+    mkp/main_bab_v1cld_gnn_batched.cpp
+    mkp/gecode_bab_v1cld_gnn_batched.cpp
+    mkp/gnn_v1cld_sd_edit_native_batched.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../gnn/bnb_solver.cpp
+)
+
+target_include_directories(bab_mkp_gecode_v1cld_gnn_batched PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/mkp
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${SOLVER_GENERIC_ROOT}/covset
+    ${GECODE_PREFIX}/include
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(bab_mkp_gecode_v1cld_gnn_batched PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(bab_mkp_gecode_v1cld_gnn_batched PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    ${LIBTORCH_LINK_FLAGS}
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(bab_mkp_gecode_v1cld_gnn_batched PRIVATE -O3 -march=native)
+
+# ── Exécutable bab_mkp_gecode_gnn_batched_zaware (variante Z-AWARE de
+#    bab_mkp_gecode_gnn_batched — exploite les z déjà résolus par la
+#    propagation CP pendant le x-branching, cf.
+#    gecode_bab_gnn_batched_zaware.hpp/.cpp et gnn_sd_edit_native_batched_zaware.hpp/.cpp).
+# Fichiers séparés : gecode_bab_gnn_batched.cpp/gnn_sd_edit_native_batched.cpp
+# (originaux, utilisés par bab_mkp_gecode/bab_mkp_gecode_gnn_batched) restent
+# intacts et hors de cette cible — retour en arrière trivial.
+add_executable(bab_mkp_gecode_gnn_batched_zaware
+    mkp/main_bab_gnn_batched_zaware.cpp
+    mkp/gecode_bab_gnn_batched_zaware.cpp
+    mkp/gnn_sd_edit_native_batched_zaware.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../gnn/bnb_solver.cpp
+)
+
+target_include_directories(bab_mkp_gecode_gnn_batched_zaware PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/mkp
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${SOLVER_GENERIC_ROOT}/covset
+    ${GECODE_PREFIX}/include
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(bab_mkp_gecode_gnn_batched_zaware PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(bab_mkp_gecode_gnn_batched_zaware PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    ${LIBTORCH_LINK_FLAGS}
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(bab_mkp_gecode_gnn_batched_zaware PRIVATE -O3 -march=native)
 
 # ── Exécutable bab_kp_gecode (Gecode BAB + borne V1LD, cas CC-KP m=1) ────────
 # Pas de dépendance LibTorch/GNN : seuls REF et V1LD sont supportés (V1CLD est
@@ -361,6 +438,7 @@ target_include_directories(bench_ssp_bab PRIVATE
 target_link_libraries(bench_ssp_bab PRIVATE
     v1ld_generic_core
     ortools::ortools
+    OpenMP::OpenMP_CXX
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
@@ -386,6 +464,7 @@ target_include_directories(bench_ssp_bab_file PRIVATE
 target_link_libraries(bench_ssp_bab_file PRIVATE
     v1ld_generic_core
     ortools::ortools
+    OpenMP::OpenMP_CXX
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
@@ -414,11 +493,164 @@ target_include_directories(bab_ssp_gecode_base_collect PRIVATE
 target_link_libraries(bab_ssp_gecode_base_collect PRIVATE
     v1ld_generic_core
     ortools::ortools
+    OpenMP::OpenMP_CXX
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
 
 target_compile_options(bab_ssp_gecode_base_collect PRIVATE -O3 -march=native)
+
+# ── Exécutable test_gnn_v1cld_native (validation numérique standalone de
+#    l'intégration GNN→borne V1CLD SSP contre la référence Python, étape 2 du
+#    portage MKP→SSP, cf. ssp/gnn_v1cld_native.hpp) — pas de dépendance Gecode
+#    (SSPCLDProblemBnB/ssp_loader sont indépendants de Gecode, contrairement à
+#    SSPSpaceBnB ; le branchement dans le vrai B&B est test_gnn_v1cld_bab
+#    ci-dessous, étape 3) ──
+add_executable(test_gnn_v1cld_native
+    ssp/test_gnn_v1cld_native.cpp
+    ssp/gnn_v1cld_native.cpp
+)
+
+target_include_directories(test_gnn_v1cld_native PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(test_gnn_v1cld_native PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(test_gnn_v1cld_native PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    ${LIBTORCH_LINK_FLAGS}
+)
+
+target_compile_options(test_gnn_v1cld_native PRIVATE -O3 -march=native)
+
+# ── Exécutable test_gnn_v1cld_bab (étape 3 : intégration bout-en-bout du GNN
+#    DANS le vrai B&B Gecode, SSPBoundMode::GNN, cf. ssp/gecode_bab_ssp.hpp) ─
+add_executable(test_gnn_v1cld_bab
+    ssp/test_gnn_v1cld_bab.cpp
+    ssp/gnn_v1cld_native.cpp
+    ssp/gecode_bab_ssp.cpp
+)
+
+target_include_directories(test_gnn_v1cld_bab PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(test_gnn_v1cld_bab PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(test_gnn_v1cld_bab PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    ${LIBTORCH_LINK_FLAGS}
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+# ── Exécutable test_gnn_v1cld_bab_batched_skeleton (étape B1 du batching
+#    multi-nœuds SSP, cf. ssp/gecode_bab_ssp_gnn_batched.hpp) : valide la DFS
+#    manuelle + bucketing (G,N_z) SEULE, backend stub sans borne (équivalent
+#    REF) -- aucune dépendance LibTorch, le GNN vient à l'étape B2 ──
+add_executable(test_gnn_v1cld_bab_batched_skeleton
+    ssp/test_gnn_v1cld_bab_batched_skeleton.cpp
+    ssp/gecode_bab_ssp_gnn_batched.cpp
+)
+
+target_include_directories(test_gnn_v1cld_bab_batched_skeleton PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(test_gnn_v1cld_bab_batched_skeleton PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(test_gnn_v1cld_bab_batched_skeleton PRIVATE -O3 -march=native)
+
+# ── Exécutable test_gnn_v1cld_ssp_native_batched (étape B2 du batching
+#    multi-nœuds SSP, cf. ssp/gnn_v1cld_native_batched.hpp) : valide
+#    query_batch() contre la référence Python ET contre le mode séquentiel
+#    (GNNV1CLDNative::query, déjà validé étape 2) -- suffixe _ssp pour éviter
+#    la collision de nom avec test_gnn_v1cld_native_batched (MKP, plus bas
+#    dans ce fichier) -- gecode_bab_ssp_gnn_batched.hpp (inclus pour
+#    SSPGNNBoundBackendBatch) tire les types Gecode de gecode_bab_ssp.hpp,
+#    donc les libs Gecode sont liées par précaution même si aucun Space n'est
+#    jamais instancié ici ──
+add_executable(test_gnn_v1cld_ssp_native_batched
+    ssp/test_gnn_v1cld_native_batched.cpp
+    ssp/gnn_v1cld_native.cpp
+    ssp/gnn_v1cld_native_batched.cpp
+)
+
+target_include_directories(test_gnn_v1cld_ssp_native_batched PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(test_gnn_v1cld_ssp_native_batched PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(test_gnn_v1cld_ssp_native_batched PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    ${LIBTORCH_LINK_FLAGS}
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(test_gnn_v1cld_ssp_native_batched PRIVATE -O3 -march=native)
+
+# ── Exécutable test_gnn_v1cld_bab_batched (étape B3 : intégration bout-en-bout
+#    du batching multi-nœuds SSP dans un vrai B&B, backend GNN réel -- cf.
+#    ssp/test_gnn_v1cld_bab_batched.cpp) ──
+add_executable(test_gnn_v1cld_bab_batched
+    ssp/test_gnn_v1cld_bab_batched.cpp
+    ssp/gecode_bab_ssp_gnn_batched.cpp
+    ssp/gnn_v1cld_native.cpp
+    ssp/gnn_v1cld_native_batched.cpp
+)
+
+target_include_directories(test_gnn_v1cld_bab_batched PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(test_gnn_v1cld_bab_batched PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(test_gnn_v1cld_bab_batched PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    ${LIBTORCH_LINK_FLAGS}
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(test_gnn_v1cld_bab_batched PRIVATE -O3 -march=native)
+
+target_compile_options(test_gnn_v1cld_bab PRIVATE -O3 -march=native)
 
 # ── Exécutable debug_root_bound (diagnostic temporaire — validité de la borne
 #    v1CLD à la racine, cf. investigation du FAIL sanity check E=4,T=8,N=20) ──
@@ -444,6 +676,33 @@ target_link_libraries(debug_root_bound PRIVATE
 )
 
 target_compile_options(debug_root_bound PRIVATE -O3 -march=native)
+
+# ── Variante debug_root_bound_v1ld (test de controle, 2026-08-12 -- v1LD n'a
+#    pas d'approximation dans Delta_i, sert a isoler si l'invalidite observee
+#    sur v1CLD est bien specifique a sa formule d'agregation) ────────────────
+add_executable(debug_root_bound_v1ld
+    ssp/debug_root_bound_v1ld.cpp
+    ssp/gecode_bab_ssp.cpp
+    ../gecode_base/gecode_solver.cpp
+)
+
+target_include_directories(debug_root_bound_v1ld PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(debug_root_bound_v1ld PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(debug_root_bound_v1ld PRIVATE -O3 -march=native)
 
 # ── Exécutable debug_warmstart_rounds (diagnostic temporaire — compare v1LD
 #    et v1CLD sous le meme protocole de rafales courtes + warm-start) ─────────
@@ -511,6 +770,28 @@ target_link_libraries(debug_replay_violation PRIVATE
 )
 
 target_compile_options(debug_replay_violation PRIVATE -O3 -march=native)
+
+# ── Variante debug_replay_violation_rounded (test hypothese scaling/troncature
+#    SCALE=1000, 2026-08-12 -- cf. salary_rounded EXPERIMENTAL dans
+#    gecode_bab_ssp.hpp) — temporaire, a retirer une fois l'hypothese tranchee.
+add_executable(debug_replay_violation_rounded
+    ssp/debug_replay_violation_rounded.cpp
+    ${SOLVER_GENERIC_ROOT}/ssp/ssp_loader.cpp
+)
+
+target_include_directories(debug_replay_violation_rounded PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+)
+
+target_link_libraries(debug_replay_violation_rounded PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+)
+
+target_compile_options(debug_replay_violation_rounded PRIVATE -O3 -march=native)
 
 # ── Exécutable ssp_probe (sonde rapide : Gecode base seul, pour balayages) ────
 add_executable(ssp_probe
@@ -608,6 +889,28 @@ target_link_libraries(bench_v1ld_subproblems PRIVATE
 
 target_compile_options(bench_v1ld_subproblems PRIVATE -O3 -march=native)
 
+# ── Exécutable bench_v1cld_subproblems (benchmark élémentaire — ζ_{i,j}
+#    V1CLD (MKP), λ=0, deux méthodes : bnb (production) vs dp (jamais utilisée
+#    en C++ avant ce benchmark) — cf. solver_bab/mkp/bench_v1cld_subproblems.cpp).
+#    Pas besoin de Gecode/OR-Tools : MKPCLDProblem/MKPCLDProblemDP vivent
+#    entièrement dans v1ld_generic_core (solver_generic/mkp/). ───────────────
+add_executable(bench_v1cld_subproblems
+    mkp/bench_v1cld_subproblems.cpp
+)
+
+target_include_directories(bench_v1cld_subproblems PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/mkp
+)
+
+target_link_libraries(bench_v1cld_subproblems PRIVATE
+    v1ld_generic_core
+)
+
+target_compile_options(bench_v1cld_subproblems PRIVATE -O3 -march=native)
+
 # ── Exécutable debug_zeta_gecode (diagnostic temporaire — trouve le premier
 #    scénario où solve_zeta_gecode diverge de CP-SAT, pour localiser un bug) ──
 add_executable(debug_zeta_gecode
@@ -698,6 +1001,32 @@ target_link_libraries(gnn_batch_consistency_probe PRIVATE
 )
 
 target_compile_options(gnn_batch_consistency_probe PRIVATE -O3 -march=native)
+
+# ── Exécutable test_gnn_v1cld_native_batched (validation autonome du backend
+#    GNN V1CLD AVANT tout branchement B&B — cf. test_gnn_v1cld_native_batched.cpp
+#    et test_paper/validate_v1cld_native_reference.py, la référence Python
+#    compagnon). Fichiers séparés du backend V1LD (gnn_sd_edit_native_batched.cpp) —
+#    aucune modification de la production. ──────────────────────────────────
+add_executable(test_gnn_v1cld_native_batched
+    mkp/test_gnn_v1cld_native_batched.cpp
+    mkp/gnn_v1cld_sd_edit_native_batched.cpp
+    ${GNN_NATIVE_SOURCES}
+)
+
+target_include_directories(test_gnn_v1cld_native_batched PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${SOLVER_GENERIC_ROOT}
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(test_gnn_v1cld_native_batched PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(test_gnn_v1cld_native_batched PRIVATE
+    ${LIBTORCH_LINK_FLAGS}
+    OpenMP::OpenMP_CXX
+)
+
+target_compile_options(test_gnn_v1cld_native_batched PRIVATE -O3 -march=native)
 
 # ── Exécutable gnn_cudagraph_probe (diagnostic : faisabilité CUDA graphs pour
 #    amortir l'overhead de dispatch du forward GNN natif — cf. mémoire
@@ -819,3 +1148,80 @@ if(GNN_DEVICE STREQUAL "cuda")
 
     target_compile_options(gnn_aoti_sdedit_probe PRIVATE -O3 -march=native)
 endif()
+
+# ── Exécutable gnn_cudagraph_batched_probe (diagnostic : CUDA graphs sur le
+#    modèle BATCHÉ sd_edit après freeze+optimize_for_inference — baseline de
+#    production actuelle — cf. gnn_cudagraph_probe pour la version non
+#    batchée, gain ~10% validé) — charge le module scripté batché via
+#    ensure_scripted_batched_export (spawn python si cache absent/périmé) ────
+add_executable(gnn_cudagraph_batched_probe
+    mkp/gnn_cudagraph_batched_probe.cpp
+)
+
+target_include_directories(gnn_cudagraph_batched_probe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(gnn_cudagraph_batched_probe PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+
+target_link_libraries(gnn_cudagraph_batched_probe PRIVATE
+    ${LIBTORCH_LINK_FLAGS}
+    -lcudart
+)
+
+target_compile_options(gnn_cudagraph_batched_probe PRIVATE -O3 -march=native)
+
+# ── Exécutable debug_mkp_root_bound (test empirique, 2026-08-12 -- meme
+#    question que debug_root_bound_v1ld/SSP mais pour MKP : le meme defaut
+#    d'agregation Delta_i (v1cld_solver.cpp, partage entre MKP et SSP) se
+#    manifeste-t-il aussi empiriquement sur MKP ?) ──────────────────────────
+add_executable(debug_mkp_root_bound
+    mkp/debug_mkp_root_bound.cpp
+    ${SOLVER_GENERIC_ROOT}/mkp/mkp_cld_problem.cpp
+)
+
+target_include_directories(debug_mkp_root_bound PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/mkp
+)
+
+target_link_libraries(debug_mkp_root_bound PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+)
+
+target_compile_options(debug_mkp_root_bound PRIVATE -O3 -march=native)
+
+# ── Exécutable bench_ssp_bab_file_scentered (diagnostic, 2026-08-13) : meme
+#    comparaison Gecode base / B&B v1CLD / B&B v1LD que bench_ssp_bab_file,
+#    mais B&B v1CLD utilise solve_v1cld_scentered (centrage PAR SCENARIO)
+#    au lieu du centrage global -- teste la validite sur une recherche
+#    complete (des milliers de noeuds), pas juste un noeud capture a la main.
+#    Fichiers separes de gecode_bab_ssp.hpp/.cpp et v1cld_solver.cpp : ne
+#    touche a rien du code de production existant.
+add_executable(bench_ssp_bab_file_scentered
+    ssp/bench_ssp_bab_file_scentered.cpp
+    ssp/gecode_bab_ssp_scentered.cpp
+    ssp/v1cld_solver_scentered.cpp
+    ../gecode_base/gecode_solver.cpp
+)
+
+target_include_directories(bench_ssp_bab_file_scentered PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(bench_ssp_bab_file_scentered PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(bench_ssp_bab_file_scentered PRIVATE -O3 -march=native)

@@ -1,0 +1,2 @@
+data/knapsack/datasets-pisinger/ccmk-song-pisinger-n20-m5-a50-we-r42-S20.txt,0
+data/knapsack/datasets-pisinger/ccmk-song-pisinger-n25-m5-a50-we-r42-S100.txt,0
