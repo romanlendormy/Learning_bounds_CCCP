@@ -96,6 +96,7 @@ V1CLDResult solve_v1cld(
     Vec1d prev_y(N, 0.0);
     auto  t0 = std::chrono::high_resolution_clock::now();
     int   iters_run = 0;
+    double t_zeta_theta_accum_s = 0.0;  // cf. V1CLDResult::t_zeta_theta_s
 
     // Buffers réutilisés à chaque itération
     // FIX (2026-08-13) : Lambda_sum_i PAR SCENARIO (N x d) au lieu d'un seul
@@ -135,6 +136,7 @@ V1CLDResult solve_v1cld(
         }
 
         // ── (B) Sous-problèmes θ_{i,j} et ζ_{i,j} ───────────────────────────
+        auto t_zeta_theta_t0 = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < N; ++i) {
             const double p_ij = p[i] * inv_m;
             for (int j = 0; j < m; ++j) {
@@ -155,6 +157,8 @@ V1CLDResult solve_v1cld(
                 x_zeta[i][j]   = std::move(xz);
             }
         }
+        t_zeta_theta_accum_s += std::chrono::duration<double>(
+            std::chrono::high_resolution_clock::now() - t_zeta_theta_t0).count();
 
         // ── (C) Pénalité agrégée par scénario + knapsack glouton ─────────────
         // Δ_i = (1/m) Σ_j δ_{i,j}
@@ -265,5 +269,6 @@ V1CLDResult solve_v1cld(
     res.z_changes      = std::move(zchanges_vec);
     res.solve_time_s   = std::chrono::duration<double>(t1 - t0).count();
     res.iterations_run = iters_run;
+    res.t_zeta_theta_s = t_zeta_theta_accum_s;
     return res;
 }

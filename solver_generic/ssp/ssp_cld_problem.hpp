@@ -63,6 +63,16 @@ protected:
     std::vector<std::vector<std::pair<int,int>>> adj_;  // adj_[q] = [(sym, q_next)]
     Vec2i  demand_;  // (N, T)
 
+    // Court-circuit (2026-08-20) : quand une séquence complète de T symboles
+    // est déjà entièrement déterminée (employé fixé partout par le
+    // branchement B&B), il n'existe qu'UN SEUL chemin possible dans le DFA --
+    // pas besoin de la DP sur les Q_ états (qui scanne O(T·Q_) même quand un
+    // seul état reste jamais atteignable). On suit directement seq, en O(T ×
+    // degré sortant) -- identité exacte avec ce que la DP renverrait dans ce
+    // cas précis (même valeur, même séquence), pas une approximation.
+    std::pair<double, std::vector<int>>
+    walk_fixed_sequence(int e, const std::vector<int>& seq, const Vec1d& cost) const;
+
     // DP sur le DAG déroulé pour un employé e.
     // mask_row (taille T, optionnel) : mask_row[t] ∈ {-1, 0..3}, -1 = libre.
     // mask_row == nullptr → comportement inchangé (aucune contrainte sur sigma).

@@ -70,11 +70,42 @@ SSPCLDProblem::SSPCLDProblem(
             c_[e * T_ * SIGMA_SIZE + t * SIGMA_SIZE + SIGMA_W] = -salary[t];
 }
 
+// ── Court-circuit séquence entièrement déterminée (2026-08-20) ───────────────
+// cf. docstring header. seq DOIT avoir T_ éléments, tous dans [0, SIGMA_SIZE).
+
+std::pair<double, std::vector<int>>
+SSPCLDProblem::walk_fixed_sequence(int e, const std::vector<int>& seq, const Vec1d& cost) const
+{
+    const int base = e * T_ * SIGMA_SIZE;
+    int q = initial_;
+    double val = 0.0;
+    for (int t = 0; t < T_; ++t) {
+        const int sigma = seq[t];
+        int q_next = -1;
+        for (auto [sym, dst] : adj_[q])
+            if (sym == sigma) { q_next = dst; break; }
+        if (q_next < 0) return {NEG_INF_CLD, seq};  // transition invalide : infaisable
+        val += cost[base + t * SIGMA_SIZE + sigma];
+        q = q_next;
+    }
+    const bool accept = std::binary_search(accepting_sorted_.begin(), accepting_sorted_.end(), q);
+    if (!accept) return {NEG_INF_CLD, seq};
+    return {val, seq};
+}
+
 // ── DP pour un employé e (sans contrainte sur sigma) ─────────────────────────
 
 std::pair<double, std::vector<int>>
 SSPCLDProblem::dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row) const
 {
+    if (mask_row) {
+        bool fully_fixed = true;
+        for (int t = 0; t < T_; ++t)
+            if ((*mask_row)[t] < 0) { fully_fixed = false; break; }
+        if (fully_fixed)
+            return walk_fixed_sequence(e, *mask_row, cost);
+    }
+
     const int base = e * T_ * SIGMA_SIZE;
 
     Vec1d dp(Q_, NEG_INF_CLD);
@@ -136,6 +167,20 @@ std::pair<double, std::vector<int>>
 SSPCLDProblem::dp_one_employee_forced_at(int e, int t_force, const Vec1d& cost,
                                           const Vec1i* mask_row) const
 {
+    if (mask_row) {
+        bool rest_fixed = true;
+        for (int t = 0; t < T_; ++t) {
+            if (t == t_force) continue;
+            if ((*mask_row)[t] < 0) { rest_fixed = false; break; }
+        }
+        if (rest_fixed) {
+            std::vector<int> seq(T_);
+            for (int t = 0; t < T_; ++t)
+                seq[t] = (t == t_force) ? SIGMA_W : (*mask_row)[t];
+            return walk_fixed_sequence(e, seq, cost);
+        }
+    }
+
     const int base = e * T_ * SIGMA_SIZE;
 
     Vec1d dp(Q_, NEG_INF_CLD);

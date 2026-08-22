@@ -46,6 +46,15 @@ struct V1CLDResult {
     Vec1d  z_changes;       // nb de scénarios où y* a changé
     double solve_time_s;
     int    iterations_run;
+    // Temps cumulé (s) passé dans le calcul de θ_{i,j}/ζ_{i,j} (étape B de la
+    // boucle, cf. docstring v1cld_solver.cpp) sur toutes les itérations de cet
+    // appel -- ajouté 2026-08-20 pour comparer la répartition du coût à celle
+    // du mode GNN (graph_build/forward/zeta_theta), à la demande de
+    // l'utilisateur (comparaison REF/V1CLD/GNN à taille croissante). Le reste
+    // (solve_time_s - t_zeta_theta_s) couvre Λ_sum, knapsack, sous-gradient,
+    // pas de descente, logging (étapes A,C-H) -- l'équivalent V1CLD de ce que
+    // "forward" produit côté GNN (mise à jour de λ).
+    double t_zeta_theta_s = 0.0;
 };
 
 // ── Classe abstraite ──────────────────────────────────────────────────────────

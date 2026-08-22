@@ -24,7 +24,8 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     double       rel_tol,
     int          tol_window,
     bool         use_lagrangian_bound,
-    SSPBranchHeuristic branch_heuristic)
+    SSPBranchHeuristic branch_heuristic,
+    SSPGNNBoundBackend* gnn_client)
 {
     using Clock = std::chrono::steady_clock;
     auto t0 = Clock::now();
@@ -40,6 +41,7 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     shared.t_start              = t0;
     shared.use_lagrangian_bound = use_lagrangian_bound;
     shared.branch_heuristic     = branch_heuristic;
+    shared.gnn_client           = gnn_client;
 
     SSPSpaceBnB* model = new SSPSpaceBnB(&shared);
 
@@ -76,6 +78,9 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     res.root_bound_value       = shared.root_bound_value;
     res.t_bound_total_s        = shared.t_bound_total_s;
     res.t_bab_pure_s           = res.solve_time_s - shared.t_bound_total_s;
+    res.t_v1cld_problem_build_s = shared.t_v1cld_problem_build_s;
+    res.t_v1cld_zeta_theta_s    = shared.t_v1cld_zeta_theta_s;
+    res.v1cld_iters_total       = shared.v1cld_iters_total;
 
     if (best) {
         res.objective = static_cast<double>(best->total_cost.val()) / SSPSharedData::SCALE;

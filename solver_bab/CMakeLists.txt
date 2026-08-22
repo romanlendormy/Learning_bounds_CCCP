@@ -671,6 +671,7 @@ target_include_directories(debug_root_bound PRIVATE
 target_link_libraries(debug_root_bound PRIVATE
     v1ld_generic_core
     ortools::ortools
+    OpenMP::OpenMP_CXX
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
