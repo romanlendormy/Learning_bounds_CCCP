@@ -1,0 +1,12 @@
+epsilon=0.1 master_seed=42 target_lo=1e4 target_hi=1e6
+generated=2026-08-22T11:49:49-04:00
+rep0=reused_from_sweep source=/lustre09/project/6062881/romanlen/Learning_bounds_CCCP/gnn_ssp/test_data/ssp_native_test_E8T12N100_sweep (calibration d'origine non documentée)
+rep1=generated ep_id=1
+rep2=generated ep_id=2
+rep3=generated ep_id=3
+rep4=generated ep_id=4
+rep5=generated ep_id=5
+rep6=generated ep_id=6
+rep7=generated ep_id=7
+rep8=generated ep_id=8
+rep9=generated ep_id=9
