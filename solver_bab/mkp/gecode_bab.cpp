@@ -7,13 +7,16 @@
 #include "gnn_v1ld_native.hpp"
 #include "gnn_sd_edit_native.hpp"
 #include "gnn_sd_edit_native_aoti.hpp"
+#include "gnn_v1cld_sd_edit_native.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include <tuple>
 
@@ -115,6 +118,16 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     shared.gnn_min_gap_frac   = gnn_min_gap_frac;
     shared.gnn_max_depth_frac = gnn_max_depth_frac;
     shared.use_surrogate_zeta = use_surrogate_zeta;
+    // GNN_COMPARE_BOUND : opt-in (variable d'env, même pattern que
+    // ROOT_SUBGRAD_TRACE) — cf. doc MKPSharedData::gnn_compare_bound.
+    // Absent/non-parsable → 1e18 (désactivé, comportement historique).
+    if (const char* env_bound = std::getenv("GNN_COMPARE_BOUND")) {
+        try {
+            shared.gnn_compare_bound = std::stod(env_bound);
+        } catch (const std::exception&) {
+            shared.gnn_compare_bound = 1e18;
+        }
+    }
     // Découple more() de BoundBrancher::commit() (cf. revue niveau 1 point A) :
     // la boucle DFS ci-dessous appelle explicitement more() APRÈS un premier
     // status() de propagation CP pure, pour ne payer le coût de la borne
@@ -128,11 +141,27 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     // la résolution, cf. commentaire sur MKPSharedData::gnn_client).
     std::unique_ptr<GNNBoundBackend> gnn_client;
     double t_gnn_warmup_s = 0.0;
-    if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT) {
+    if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
+        bound_mode == BoundMode::GNN_ROOT_V1CLD) {
         if (gnn_checkpoint_path.empty())
             throw std::invalid_argument(
-                "solve_gecode_bab_mkp : bound_mode=GNN/GNN_ROOT requiert gnn_checkpoint_path");
-        if (gnn_backend == "native" || gnn_backend == "native_aoti") {
+                "solve_gecode_bab_mkp : bound_mode=GNN/GNN_ROOT/GNN_ROOT_V1CLD requiert "
+                "gnn_checkpoint_path");
+        if (bound_mode == BoundMode::GNN_ROOT_V1CLD || gnn_backend == "native" || gnn_backend == "native_aoti") {
+            // GNN_ROOT_V1CLD : adaptateur mono-nœud (query()) autour du
+            // backend batché V1CLD (GNNV1CLDSdEditNativeBatched, query_batch,
+            // taille de batch 1) — cf. gnn_v1cld_sd_edit_native.hpp. Une seule
+            // topologie de graphe disponible côté V1CLD (sd_edit) : pas de
+            // gnn_variant=homogene ni de backend ipc/native_aoti pour ce mode.
+            if (bound_mode == BoundMode::GNN_ROOT_V1CLD) {
+                if (gnn_backend != "native")
+                    throw std::invalid_argument(
+                        "solve_gecode_bab_mkp : bound_mode=GNN_ROOT_V1CLD ne supporte que "
+                        "gnn_backend=native (pas d'adaptateur IPC/AOTI V1CLD pour l'instant)");
+                gnn_client = std::make_unique<GNNV1CLDSdEditNative>(
+                    gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b,
+                    use_surrogate_zeta);
+            } else {
             // build_graph_cpp() est réimplémenté séparément pour chaque
             // topologie de graphe : GNNV1LDNative (gnn_v1ld_native.cpp,
             // gnn_variant="homogene", clique scénario-scénario) et
@@ -164,6 +193,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
                     "solve_gecode_bab_mkp : gnn_backend=native ne supporte que "
                     "gnn_variant=homogene|sd_edit (variante \"" + gnn_variant +
                     "\" non portée en C++) — utiliser gnn_backend=ipc");
+            }
 
             // Pré-chauffage TorchScript (identique pour les deux variantes —
             // même mécanisme JIT "profiling", indépendant de la topologie du

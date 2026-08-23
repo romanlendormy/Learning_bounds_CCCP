@@ -20,6 +20,9 @@
  * tol_window    : fenêtre (en itérations) pour rel_tol
  * v_lower       : borne inférieure sur v* pour le pas de Polyak (-1e18 → 1/√t)
  * lambda_init   : λ initial (N × m × d) ; vide → zéros
+ * target_bound  : arrêt anticipé dès que best_upper <= target_bound (échelle
+ *                relative L1, pas fp) — cf. doc symétrique sur solve_v1ld
+ *                (v1ld_solver.hpp). 1e18 (défaut) = désactivé.
  */
 V1CLDResult solve_v1cld(
     V1CLDProblem&    problem,
@@ -30,5 +33,6 @@ V1CLDResult solve_v1cld(
     double           rel_tol      = -1.0,
     int              tol_window   = 500,
     double           v_lower      = -1e18,
-    const Vec3d&     lambda_init  = {}
+    const Vec3d&     lambda_init  = {},
+    double           target_bound = 1e18
 );

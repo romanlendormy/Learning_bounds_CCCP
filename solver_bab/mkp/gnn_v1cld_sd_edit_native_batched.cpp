@@ -444,52 +444,79 @@ void GNNV1CLDSdEditNativeBatched::query_batch(
     }
     const int64_t E = edge_index_1.size(1);
 
-    torch::Tensor offsets = torch::arange(B, torch::kInt64) * V;
-    torch::Tensor ei_rep = edge_index_1.unsqueeze(0).expand({B, 2, E}) + offsets.view({B, 1, 1});
-    torch::Tensor edge_index_B = ei_rep.permute({1, 0, 2}).reshape({2, B * E}).contiguous();
-    torch::Tensor edge_weight_B = edge_weight_1.unsqueeze(0).expand({B, E}).reshape({B * E}).contiguous();
-
-    torch::Tensor X = torch::empty({static_cast<int64_t>(B) * V, node_dim}, torch::kFloat32);
-    torch::Tensor ctx = torch::empty({B, 9}, torch::kFloat32);
-    auto ctx_acc = ctx.accessor<float, 2>();
-    for (int bIdx = 0; bIdx < B; ++bIdx) {
-        std::memcpy(X.data_ptr<float>() + static_cast<int64_t>(bIdx) * V * node_dim,
-                    feats[bIdx].X_flat.data(), sizeof(float) * V * node_dim);
-        for (int c9 = 0; c9 < 9; ++c9) ctx_acc[bIdx][c9] = feats[bIdx].ctx[c9];
-    }
-
     auto t1 = Clock::now();
 
-    torch::NoGradGuard no_grad;
-    torch::Tensor X_dev = X, ei_dev = edge_index_B, ew_dev = edge_weight_B, ctx_dev = ctx;
-    if (impl_->device.is_cuda()) {
-        X_dev = X_dev.to(impl_->device);
-        ei_dev = ei_dev.to(impl_->device);
-        ew_dev = ew_dev.to(impl_->device);
-        ctx_dev = ctx_dev.to(impl_->device);
-    }
-
-    std::vector<torch::jit::IValue> inputs = {X_dev, ei_dev, ew_dev, ctx_dev,
-                                               static_cast<int64_t>(n_g), static_cast<int64_t>(m),
-                                               static_cast<int64_t>(B)};
-    torch::Tensor h_out = impl_->module.forward(inputs).toTensor();
-    if (impl_->device.is_cuda()) h_out = h_out.to(torch::kCPU);
-    auto t2 = Clock::now();
+    // ── Micro-batching interne (2026-08-21) ──────────────────────────────────
+    // V1CLD a un graphe O(N_z*m) nœuds / O(N_z*m*n_g²) arêtes (contre O(N_z)/
+    // O(N_z*n_g²) pour V1LD, cf. build_edges_v1cld_cpp) — un seul forward() à
+    // B=K=64 sature/dépasse la VRAM (OOM confirmé jusqu'à 140Go sur H200 pour
+    // n=25/N=1000). Découper B en sous-lots de MAX_SUBBATCH est NUMÉRIQUEMENT
+    // EXACT (pas une approximation) : le graphe est block-diagonal (offsets =
+    // bIdx*V, aucune arête entre membres du batch) et le modèle n'utilise que
+    // des LayerNorm (par nœud, aucune statistique inter-batch — vérifié dans
+    // gnn_v1cld_sd_edit_scriptable_batched.py, pas de BatchNorm). B externe
+    // (taille du bucket K, cf. gecode_bab_v1cld_gnn_batched.cpp) reste
+    // inchangé — seul le nombre d'appels forward() GPU change, donc les
+    // statistiques de bucketing/flush restent comparables à V1LD.
+    constexpr int MAX_SUBBATCH = 8;
 
     ub_relative_out.assign(B, 0.0);
-    torch::Tensor h_out_2d = h_out.view({B, V});
-    for (int bIdx = 0; bIdx < B; ++bIdx) {
-        // Rescale : c_scale/(N*m), cf. GNN.forward de train_v1CLD_sd_edit.py:640.
-        torch::Tensor lam_b = h_out_2d[bIdx] * feats[bIdx].c_scale
-                              / (static_cast<double>(feats[bIdx].N) * static_cast<double>(m));
-        ub_relative_out[bIdx] = lagrangian_v1cld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
-                                                      feats[bIdx].c_g, N_z, m, n_g, feats[bIdx].N,
-                                                      feats[bIdx].n_fixed_z1, impl_->epsilon,
-                                                      impl_->use_surrogate_zeta);
+    double t_forward_sum = 0.0, t_bound_sum = 0.0;
+
+    for (int chunkStart = 0; chunkStart < B; chunkStart += MAX_SUBBATCH) {
+        const int chunkB = std::min(MAX_SUBBATCH, B - chunkStart);
+
+        torch::Tensor offsets = torch::arange(chunkB, torch::kInt64) * V;
+        torch::Tensor ei_rep = edge_index_1.unsqueeze(0).expand({chunkB, 2, E}) + offsets.view({chunkB, 1, 1});
+        torch::Tensor edge_index_B = ei_rep.permute({1, 0, 2}).reshape({2, chunkB * E}).contiguous();
+        torch::Tensor edge_weight_B = edge_weight_1.unsqueeze(0).expand({chunkB, E}).reshape({chunkB * E}).contiguous();
+
+        torch::Tensor X = torch::empty({static_cast<int64_t>(chunkB) * V, node_dim}, torch::kFloat32);
+        torch::Tensor ctx = torch::empty({chunkB, 9}, torch::kFloat32);
+        auto ctx_acc = ctx.accessor<float, 2>();
+        for (int j = 0; j < chunkB; ++j) {
+            const int bIdx = chunkStart + j;
+            std::memcpy(X.data_ptr<float>() + static_cast<int64_t>(j) * V * node_dim,
+                        feats[bIdx].X_flat.data(), sizeof(float) * V * node_dim);
+            for (int c9 = 0; c9 < 9; ++c9) ctx_acc[j][c9] = feats[bIdx].ctx[c9];
+        }
+
+        auto tc1 = Clock::now();
+
+        torch::NoGradGuard no_grad;
+        torch::Tensor X_dev = X, ei_dev = edge_index_B, ew_dev = edge_weight_B, ctx_dev = ctx;
+        if (impl_->device.is_cuda()) {
+            X_dev = X_dev.to(impl_->device);
+            ei_dev = ei_dev.to(impl_->device);
+            ew_dev = ew_dev.to(impl_->device);
+            ctx_dev = ctx_dev.to(impl_->device);
+        }
+
+        std::vector<torch::jit::IValue> inputs = {X_dev, ei_dev, ew_dev, ctx_dev,
+                                                   static_cast<int64_t>(n_g), static_cast<int64_t>(m),
+                                                   static_cast<int64_t>(chunkB)};
+        torch::Tensor h_out = impl_->module.forward(inputs).toTensor();
+        if (impl_->device.is_cuda()) h_out = h_out.to(torch::kCPU);
+        auto tc2 = Clock::now();
+
+        torch::Tensor h_out_2d = h_out.view({chunkB, V});
+        for (int j = 0; j < chunkB; ++j) {
+            const int bIdx = chunkStart + j;
+            // Rescale : c_scale/(N*m), cf. GNN.forward de train_v1CLD_sd_edit.py:640.
+            torch::Tensor lam_b = h_out_2d[j] * feats[bIdx].c_scale
+                                  / (static_cast<double>(feats[bIdx].N) * static_cast<double>(m));
+            ub_relative_out[bIdx] = lagrangian_v1cld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
+                                                          feats[bIdx].c_g, N_z, m, n_g, feats[bIdx].N,
+                                                          feats[bIdx].n_fixed_z1, impl_->epsilon,
+                                                          impl_->use_surrogate_zeta);
+        }
+        auto tc3 = Clock::now();
+
+        t_forward_sum += std::chrono::duration<double>(tc2 - tc1).count();
+        t_bound_sum   += std::chrono::duration<double>(tc3 - tc2).count();
     }
-    auto t3 = Clock::now();
 
     timing.t_graph_build_s   = std::chrono::duration<double>(t1 - t0).count();
-    timing.t_forward_s       = std::chrono::duration<double>(t2 - t1).count();
-    timing.t_bound_compute_s = std::chrono::duration<double>(t3 - t2).count();
+    timing.t_forward_s       = t_forward_sum;
+    timing.t_bound_compute_s = t_bound_sum;
 }

@@ -76,3 +76,14 @@ gnn_ssp/runs/
 solver_generic/bench_ssp*.csv
 solver_generic/bench_ssp*.png
 solver_generic/run_e3t8.csv
+
+# Cache d'export TorchScript (régénéré automatiquement au premier run côté
+# C++, cf. ensure_scripted_batched_export()/ensure_scripted_export())
+gnn_sd_edit/runs_v1cld/*.scripted_batched.pt
+gnn_sd_edit/runs_v1cld/*.v1cld_scripted_batched.pt
+gnn_sd_edit/runs_v1cld/*.scripted.pt
+
+# Instances de test volumineuses (recréables via generate_test_instances.py,
+# génération déterministe : SEEDS=range(43,53))
+test_paper_trillium/instance_*.txt
+test_paper_trillium_v1cld/instance_*.txt

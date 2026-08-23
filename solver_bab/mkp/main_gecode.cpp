@@ -96,11 +96,12 @@ int main(int argc, char* argv[])
     // (squelette V1LD nu, sans borne — référence pour isoler l'effet du
     // branchement/incumbent/moteur DFS de l'effet de la borne elle-même).
     std::string mode_str    = (argc > 7) ? argv[7] : "v1ld";
-    BoundMode   bound_mode  = (mode_str == "v1cld")    ? BoundMode::V1CLD
-                            : (mode_str == "gnn")      ? BoundMode::GNN
-                            : (mode_str == "gnn_root") ? BoundMode::GNN_ROOT
-                            : (mode_str == "ref")      ? BoundMode::REF
-                                                       : BoundMode::V1LD;
+    BoundMode   bound_mode  = (mode_str == "v1cld")          ? BoundMode::V1CLD
+                            : (mode_str == "gnn")            ? BoundMode::GNN
+                            : (mode_str == "gnn_root")       ? BoundMode::GNN_ROOT
+                            : (mode_str == "gnn_root_v1cld") ? BoundMode::GNN_ROOT_V1CLD
+                            : (mode_str == "ref")            ? BoundMode::REF
+                                                             : BoundMode::V1LD;
     // patience : "patience" active le mode convergence, sinon itérations fixes
     // (ignoré en mode gnn : pas de sous-gradient à faire converger)
     bool        patience    = (argc > 8) && std::string(argv[8]) == "patience";
@@ -190,13 +191,16 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    if ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT) && gnn_checkpoint.empty()) {
-        std::cerr << "Erreur : mode=gnn/gnn_root requiert un chemin de checkpoint "
+    if ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
+         bound_mode == BoundMode::GNN_ROOT_V1CLD) && gnn_checkpoint.empty()) {
+        std::cerr << "Erreur : mode=gnn/gnn_root/gnn_root_v1cld requiert un chemin de checkpoint "
                      "(argument 10) — usage :\n"
                      "  bab_mkp_gecode <dataset> [eps] [T_node] [time_lim] "
-                     "[rep] [T_root] gnn|gnn_root <ckpt.pt> [device=cpu] [python_exe=python3] "
-                     "[backend=ipc|native] [variant=homogene|sd_edit] [gnn_min_depth_frac=0.0] "
-                     "[gnn_min_gap_frac=0.0] [gnn_max_depth_frac=1.0]\n";
+                     "[rep] [T_root] gnn|gnn_root|gnn_root_v1cld <ckpt.pt> [device=cpu] "
+                     "[python_exe=python3] [backend=ipc|native] [variant=homogene|sd_edit] "
+                     "[gnn_min_depth_frac=0.0] [gnn_min_gap_frac=0.0] [gnn_max_depth_frac=1.0]\n"
+                     "  (mode gnn_root_v1cld : backend=native uniquement, variant/python_exe "
+                     "ignorés — cf. GNNV1CLDSdEditNative, gnn_v1cld_sd_edit_native.hpp)\n";
         return 1;
     }
 
@@ -374,11 +378,12 @@ int main(int argc, char* argv[])
 
     std::cout << "═══════════════════════════════════════════════════\n";
     std::cout << "  CCMKP — Gecode BAB + borne "
-              << (bound_mode == BoundMode::V1LD     ? "V1LD (ζ exact B&B)"
-                : bound_mode == BoundMode::V1CLD    ? "V1CLD (ζ DP 1D exact)"
-                : bound_mode == BoundMode::REF      ? "REF (squelette nu, sans borne)"
-                : bound_mode == BoundMode::GNN_ROOT ? "GNN_ROOT (one-shot, racine seulement, REF ensuite)"
-                                                     : "GNN (one-shot, pas de sous-gradient)")
+              << (bound_mode == BoundMode::V1LD          ? "V1LD (ζ exact B&B)"
+                : bound_mode == BoundMode::V1CLD         ? "V1CLD (ζ DP 1D exact)"
+                : bound_mode == BoundMode::REF           ? "REF (squelette nu, sans borne)"
+                : bound_mode == BoundMode::GNN_ROOT      ? "GNN_ROOT (one-shot V1LD, racine seulement, REF ensuite)"
+                : bound_mode == BoundMode::GNN_ROOT_V1CLD ? "GNN_ROOT_V1CLD (one-shot V1CLD, racine seulement, REF ensuite)"
+                                                          : "GNN (one-shot, pas de sous-gradient)")
               << "\n";
     std::cout << "═══════════════════════════════════════════════════\n";
     std::cout << "  Fichier : " << dataset << "\n";
@@ -390,7 +395,8 @@ int main(int argc, char* argv[])
               << "  mode=" << mode_str
               << (patience ? ("  patience=oui(tol=" + std::to_string(patience_tol) + ")") : "  patience=non")
               << ((bound_mode == BoundMode::V1LD && use_surrogate_zeta) ? "  zeta_method=surrogate" : "")
-              << ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT) ? ("  gnn_backend=" + gnn_backend + "  gnn_variant=" + gnn_variant) : "")
+              << ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
+                   bound_mode == BoundMode::GNN_ROOT_V1CLD) ? ("  gnn_backend=" + gnn_backend + "  gnn_variant=" + gnn_variant) : "")
               << ((bound_mode == BoundMode::GNN && gnn_min_depth_frac > 0.0) ? ("  gnn_min_depth_frac=" + std::to_string(gnn_min_depth_frac)) : "")
               << ((bound_mode == BoundMode::GNN && gnn_min_gap_frac > 0.0) ? ("  gnn_min_gap_frac=" + std::to_string(gnn_min_gap_frac)) : "")
               << ((bound_mode == BoundMode::GNN && gnn_max_depth_frac < 1.0) ? ("  gnn_max_depth_frac=" + std::to_string(gnn_max_depth_frac)) : "")
@@ -493,7 +499,8 @@ int main(int argc, char* argv[])
               << (res.t_clone_total_s - res.t_clone_state_s) << " s\n"
               << "    dont dispatch brancher/CP hors clone : " << std::setprecision(4)
               << (res.t_bab_pure_s - res.t_clone_total_s) << " s\n";
-    if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT) {
+    if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
+        bound_mode == BoundMode::GNN_ROOT_V1CLD) {
         std::cout << std::setprecision(4);
         std::cout << "  --- décomposition borne GNN (cumulée sur " << res.more_calls << " appels) ---\n";
         std::cout << "  Construction de graphe    : " << res.t_gnn_graph_build_s   << " s\n";

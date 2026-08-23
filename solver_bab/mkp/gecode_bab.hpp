@@ -109,7 +109,14 @@ using namespace Gecode;
 //         pas d'incumbent initial) à V1LD/V1CLD à heuristique/moteur FIXÉS :
 //         l'écart base vs REF isole l'effet du branchement+incumbent+moteur ;
 //         l'écart REF vs V1LD/V1CLD isole l'effet de la borne seule.
-enum class BoundMode { V1LD, V1CLD, GNN, GNN_ROOT, REF };
+// GNN_ROOT_V1CLD : symétrique de GNN_ROOT, mais avec le checkpoint/backend
+// V1CLD (ζ DP 1D exact) au lieu de V1LD — cf. GNNV1CLDSdEditNative
+// (gnn_v1cld_sd_edit_native.hpp), adaptateur mono-nœud autour de
+// GNNV1CLDSdEditNativeBatched (query_batch, taille de batch 1). Ajouté pour
+// obtenir une borne "forward GNN root-only" V1CLD comparable à GNN_ROOT côté
+// V1LD (cf. mémoire project_ccmkp_trillium_migration / test_paper_trillium
+// GNN-vs-sous-gradient).
+enum class BoundMode { V1LD, V1CLD, GNN, GNN_ROOT, GNN_ROOT_V1CLD, REF };
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MKPSharedData — données partagées entre tous les espaces Gecode
@@ -179,6 +186,22 @@ struct MKPSharedData {
     int    T_node     = 30;    // itérations sous-gradient aux nœuds suivants (warm-start)
     double rel_tol    = 1e-4;  // tolérance d'arrêt anticipé du sous-gradient
     int    tol_window = 30;    // fenêtre pour vérifier la tolérance
+
+    // gnn_compare_bound : arrêt anticipé du sous-gradient À LA RACINE
+    // (is_first) dès que la borne courante atteint cette valeur ABSOLUE
+    // (même échelle que root_bound_value, i.e. fp + L1 — PAS juste L1) —
+    // typiquement la borne déjà obtenue par un forward GNN root-only
+    // (gnn_root/gnn_root_v1cld), passée via la variable d'env
+    // GNN_COMPARE_BOUND (lue dans solve_gecode_bab_mkp, gecode_bab.cpp).
+    // 1e18 (défaut) = désactivé (jamais atteint, comportement historique
+    // inchangé). Ignoré aux nœuds suivants (T_node) — la comparaison au GNN
+    // ne concerne que la racine. Ajouté suite au constat que le sous-gradient
+    // V1LD/ζ exact devient ~500x plus cher par itération à n=25 qu'à n=15
+    // (cf. mémoire project_ccmkp_trillium_migration) : courir jusqu'à
+    // convergence complète ou jusqu'à T_root=3000 est impraticable, alors
+    // qu'on ne cherche qu'à savoir à QUELLE itération le sous-gradient
+    // rattrape le GNN.
+    double gnn_compare_bound = 1e18;
 
     // ── Mode patience ─────────────────────────────────────────────────────────
     // Si true, chaque appel more() aux nœuds (hors root) tourne jusqu'à ce que
@@ -768,13 +791,14 @@ public:
             return false;
         }
 
-        // Mode GNN_ROOT : la borne n'est calculée qu'UNE FOIS par lignée (au
-        // premier appel more(), cf. lambda_warmed hérité par clonage — même
-        // notion de "premier appel" que is_first plus bas / T_root vs T_node).
-        // Une fois lambda_warmed==true, on se comporte comme REF : même
-        // court-circuit AVANT le scan des variables (Étape 1), qui n'a
-        // d'utilité que pour alimenter un calcul de borne ultérieur.
-        if (data->bound_mode == BoundMode::GNN_ROOT && lambda_warmed) {
+        // Mode GNN_ROOT / GNN_ROOT_V1CLD : la borne n'est calculée qu'UNE FOIS
+        // par lignée (au premier appel more(), cf. lambda_warmed hérité par
+        // clonage — même notion de "premier appel" que is_first plus bas /
+        // T_root vs T_node). Une fois lambda_warmed==true, on se comporte
+        // comme REF : même court-circuit AVANT le scan des variables (Étape 1),
+        // qui n'a d'utilité que pour alimenter un calcul de borne ultérieur.
+        if ((data->bound_mode == BoundMode::GNN_ROOT ||
+             data->bound_mode == BoundMode::GNN_ROOT_V1CLD) && lambda_warmed) {
             data->more_calls++;
             return false;
         }
@@ -882,7 +906,8 @@ public:
             }
         }
 
-        if (data->bound_mode == BoundMode::GNN || data->bound_mode == BoundMode::GNN_ROOT) {
+        if (data->bound_mode == BoundMode::GNN || data->bound_mode == BoundMode::GNN_ROOT ||
+            data->bound_mode == BoundMode::GNN_ROOT_V1CLD) {
             using Clock = std::chrono::steady_clock;
             auto t_bound_start = Clock::now();
             const bool is_first = !lambda_warmed;
@@ -1014,14 +1039,41 @@ public:
                       c_free, data->p, A_free, b_adj, data->epsilon))
                 : std::unique_ptr<MKPProblem>(std::make_unique<MKPProblemBnB>(
                       c_free, data->p, A_free, b_adj, data->epsilon));
-            V1LDResult res = solve_v1ld(*prob_ptr, T_iters, 0, false, -1.0,
+            // log_interval=1 UNIQUEMENT à la racine (is_first) : res.convergence
+            // porte alors la trace complète L1(t) pour t=0..T_root-1, dumpée
+            // ci-dessous sous ROOT_SUBGRAD_TRACE (comparaison au forward GNN
+            // root-only, cf. mémoire project_ccmkp_trillium_migration). Aux
+            // nœuds suivants (warm-start, T_node), log_interval reste à 0
+            // (comportement de production inchangé — pas de coût de logging
+            // répété à chaque nœud de l'arbre).
+            // target_relative : cf. doc MKPSharedData::gnn_compare_bound —
+            // uniquement à la racine (is_first), converti de l'échelle
+            // absolue (fp + L1) vers l'échelle relative (L1 seule) attendue
+            // par solve_v1ld. Désactivé (1e18) aux nœuds suivants.
+            double target_relative = is_first ? (data->gnn_compare_bound - fp) : 1e18;
+            V1LDResult res = solve_v1ld(*prob_ptr, T_iters, is_first ? 1 : 0, false, -1.0,
                                         node_tol, data->tol_window, -1e18,
-                                        lambda_init);
+                                        lambda_init, -1.0, 50, target_relative);
 
             for (int i = 0; i < N; ++i)
                 for (int kf = 0; kf < n_free; ++kf)
                     lambda_v1ld[i][free_vars[kf]] = res.lambda_star[i][kf];
             ub = fp + res.v1LD_star;
+
+            // Trace opt-in (ROOT_SUBGRAD_TRACE=1) : best_upper(t) = fp + min
+            // des L1 vus jusqu'à l'itération t — même quantité que
+            // root_bound_value, mais à CHAQUE itération plutôt que seulement à
+            // la fin. Sert à trouver t* = min{t : best_upper(t) <= borne_GNN
+            // root} en post-traitement (aucun coût si la variable d'env est
+            // absente).
+            if (is_first && std::getenv("ROOT_SUBGRAD_TRACE")) {
+                double running_best = 1e18;
+                for (size_t t = 0; t < res.convergence.size(); ++t) {
+                    running_best = std::min(running_best, res.convergence[t]);
+                    std::fprintf(stderr, "SUBGRAD_TRACE,v1ld,%zu,%.6f\n",
+                                 t + 1, fp + running_best);
+                }
+            }
 
         } else {
             // ── Mode V1CLD : ζᵢⱼ LP-relax 1D, λ ∈ R^{N×m×n} ───────────────────
@@ -1033,15 +1085,27 @@ public:
                             lambda_init[i][j][kf] = lambda_v1cld[i][j][free_vars[kf]];
 
             MKPCLDProblem prob(c_free, data->p, A_free, b_adj, data->epsilon);
-            V1CLDResult res = solve_v1cld(prob, T_iters, 0, false, -1.0,
+            // log_interval, target_relative : cf. commentaires symétriques côté V1LD ci-dessus.
+            double target_relative = is_first ? (data->gnn_compare_bound - fp) : 1e18;
+            V1CLDResult res = solve_v1cld(prob, T_iters, is_first ? 1 : 0, false, -1.0,
                                           node_tol, data->tol_window, -1e18,
-                                          lambda_init);
+                                          lambda_init, target_relative);
 
             for (int i = 0; i < N; ++i)
                 for (int j = 0; j < m; ++j)
                     for (int kf = 0; kf < n_free; ++kf)
                         lambda_v1cld[i][j][free_vars[kf]] = res.lambda_star[i][j][kf];
             ub = fp + res.v1CLD_star;
+
+            // Trace opt-in : cf. commentaire symétrique côté V1LD ci-dessus.
+            if (is_first && std::getenv("ROOT_SUBGRAD_TRACE")) {
+                double running_best = 1e18;
+                for (size_t t = 0; t < res.convergence.size(); ++t) {
+                    running_best = std::min(running_best, res.convergence[t]);
+                    std::fprintf(stderr, "SUBGRAD_TRACE,v1cld,%zu,%.6f\n",
+                                 t + 1, fp + running_best);
+                }
+            }
         }
 
         double elapsed_bound = std::chrono::duration<double>(

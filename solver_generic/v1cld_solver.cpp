@@ -68,7 +68,7 @@ V1CLDResult solve_v1cld(
     V1CLDProblem& problem,
     int T, int log_interval, bool verbose,
     double time_limit_s, double rel_tol, int tol_window,
-    double v_lower, const Vec3d& lambda_init)
+    double v_lower, const Vec3d& lambda_init, double target_bound)
 {
     const int    d   = problem.n_vars();
     const int    N   = problem.N_scen();
@@ -235,6 +235,11 @@ V1CLDResult solve_v1cld(
             if (impr / std::max(std::abs(best_upper), 1e-10) < rel_tol) break;
             best_at_tol_check = best_upper;
         }
+        // Arrêt anticipé : comparaison à une borne déjà connue (ex. forward
+        // GNN root) — cf. doc symétrique sur solve_v1ld (v1ld_solver.cpp).
+        // Garde target_bound < 1e17 : cf. commentaire détaillé côté V1LD
+        // (bug réel détecté au sanity check du 2026-08-22 sans cette garde).
+        if (target_bound < 1e17 && best_upper <= target_bound) break;
 
         // ── (H) Pas de descente + mise à jour λ_{i,j} ────────────────────────
         // Pas de Polyak si v_lower est fourni, sinon 1/√(t+1).

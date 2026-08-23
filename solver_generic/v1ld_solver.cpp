@@ -52,7 +52,7 @@ V1LDResult solve_v1ld(
     int T, int log_interval, bool verbose,
     double time_limit_s, double rel_tol, int tol_window,
     double v_lower, const Vec2d& lambda_init,
-    double abs_tol, int abs_patience)
+    double abs_tol, int abs_patience, double target_bound)
 {
     int         d   = problem.n_vars();
     int         N   = problem.N_scen();
@@ -176,6 +176,18 @@ V1LDResult solve_v1ld(
                 break;
             }
         }
+        // Arrêt anticipé : comparaison à une borne déjà connue (ex. forward
+        // GNN root) — cf. doc sur target_bound (v1ld_solver.hpp). Placé APRÈS
+        // le bloc de logging (G) pour que l'itération de croisement reste
+        // dans convergence (nécessaire pour retrouver t* en aval).
+        // Garde target_bound < 1e17 (même idiome que v_lower > -1e17 plus
+        // bas) : SANS cette garde, la valeur "désactivé" (1e18 par défaut)
+        // déclenchait l'arrêt dès la 1ère itération — best_upper <= 1e18 est
+        // trivialement vrai dès que best_upper devient fini. Bug réel détecté
+        // au sanity check du 2026-08-22 (Test B sans GNN_COMPARE_BOUND :
+        // 1 itération au lieu du comportement normal), corrigé avant tout
+        // usage sur n=25/30.
+        if (target_bound < 1e17 && best_upper <= target_bound) break;
 
         // ── (H) Pas de descente + mise à jour λ ─────────────────────────────
         double step;
