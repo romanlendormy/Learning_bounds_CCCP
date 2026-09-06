@@ -1,25 +1,32 @@
 #!/bin/bash
-# run_train_scaled_g_clip_rorqual.sh — Variante "g_clip" de
-# run_train_scaled_rorqual.sh : clip du gradient déplacé après l'accumulation
-# du batch (gnn_g_clip/train_scaled_g_clip.py) au lieu d'un clip par graphe
-# individuel. Modèle homogène uniquement. Sortie séparée (gnn_g_clip/runs/)
-# pour ne pas interférer avec les runs "gnn/" existants.
+# run_train_scaled_v1cld_sd_edit_rorqual.sh — Entraînement GNN V1CLD "sd_edit"
+# (cf. gnn_sd_edit/train_v1CLD_sd_edit.py) sur ~10 000 graphes n=10/20,
+# N=20/50/100 (data/train_base_s10) — miroir de
+# run_train_scaled_sd_edit_rorqual.sh (V1LD), même tier "10k" de référence.
+#
+# Différences avec le script V1LD miroir : pas de --light (pas de GNNLight
+# pour V1CLD), pas de --center_lam (pas d'équivalent évident, cf. docstring
+# de train_scaled_v1CLD_sd_edit.py) — ces deux flags n'existent pas dans le
+# parser du script V1CLD, les passer ferait planter argparse.
+#
+# Données déjà présentes (data/train_base_s10/instances_n{n}_m5_N{N}.txt) —
+# le format est indépendant de la borne utilisée pour guider le B&B pendant
+# la collecte, PAS besoin d'une nouvelle collecte pour V1CLD.
 #
 # Soumettre :
-#   sbatch run_train_scaled_g_clip_rorqual.sh
+#   sbatch run_train_scaled_v1cld_sd_edit_rorqual.sh
 #
-# Job exploratoire court (mesurer l'échelle naturelle du gradient de batch,
-# clip quasi désactivé via MAX_NORM très grand) :
-#   sbatch --time=00:30:00 --export=ALL,N_EPOCHS=10,MAX_NORM=1000000,SKIP_QUALITY=1,RUN_TAG=gclip_explore \
-#       run_train_scaled_g_clip_rorqual.sh
+# Calibrage GPU avant un run complet (mesurer le coût réel par epoch) :
+#   sbatch --time=00:30:00 --export=ALL,TARGET_GRAPHS=1500,N_EPOCHS=3,EVAL_EVERY=1,RUN_TAG=calib \
+#       run_train_scaled_v1cld_sd_edit_rorqual.sh
 #
 # Surcharger des paramètres :
-#   sbatch --export=ALL,N_EPOCHS=200,HIDDEN=128,DEPTH_W0=2.0 run_train_scaled_g_clip_rorqual.sh
+#   sbatch --export=ALL,N_EPOCHS=200,HIDDEN=128,DEPTH_W0=2.0 run_train_scaled_v1cld_sd_edit_rorqual.sh
 
 # ── Ressources SLURM ──────────────────────────────────────────────────────────
 #SBATCH --account=def-qcappart_gpu
 #SBATCH --chdir=/project/6062881/romanlen/Learning_bounds_CCCP
-#SBATCH --job-name=train_scaled_gclip
+#SBATCH --job-name=train_scaled_v1cld_sdedit
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=64G
 #SBATCH --time=48:00:00
@@ -39,13 +46,14 @@ MAX_NORM="${MAX_NORM:-0.5}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 SEED="${SEED:-42}"
 
-# Dataset — n=10/20, N=20/50/100 (data/train_base_s10)
+# Dataset — n=10/20, N=20/50/100 (data/train_base_s10), identique au tier V1LD "10k"
 TARGET_GRAPHS="${TARGET_GRAPHS:-10000}"    # ~1667/combo réparti également sur les 6 (n,N)
 ROOT_FRAC="${ROOT_FRAC:-0.05}"
 RESERVOIR_K="${RESERVOIR_K:-2}"
 N_SCENS="${N_SCENS:-20 50 100}"
+N_LIST="${N_LIST:-10 20}"
 
-# Architecture (tête h_item_k+h_scen_i+g_pool, cf. train_gnn_v1ld.py)
+# Architecture (tête h_item_k+h_scen_i+g_pool, cf. train_v1CLD_sd_edit.py::GNN)
 USE_MAX_POOL="${USE_MAX_POOL:-1}"
 # Scheduler LR :
 #   LR_WARMUP_EP>0  → LinearWarmup+CosineDecay (recommandé, pas de restarts)
@@ -55,8 +63,6 @@ LR_WARMUP_EP="${LR_WARMUP_EP:-10}"
 LR_T0="${LR_T0:-0}"
 LR_T_MULT="${LR_T_MULT:-1}"
 NO_SCHEDULER="${NO_SCHEDULER:-0}"
-# Centrage des λ sur les scénarios (élimine dérive de jauge) : 1 = activé
-CENTER_LAM="${CENTER_LAM:-1}"
 
 # Pondération depth
 DEPTH_W0="${DEPTH_W0:-1.0}"
@@ -84,19 +90,19 @@ EVAL_EVERY="${EVAL_EVERY:-10}"
 EVAL_SAMPLE="${EVAL_SAMPLE:-400}"
 KEEP_CKPTS="${KEEP_CKPTS:-3}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
-RUN_TAG="${RUN_TAG:-v7_n10_20}"
+RUN_TAG="${RUN_TAG:-v1_sdedit_v1cld_n10_20}"
 
 # ── Chemins ───────────────────────────────────────────────────────────────────
 REPO="${SLURM_SUBMIT_DIR:-$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )}"
 VENV_PATH="$HOME/envs/learning_bounds"
-OUT_DIR="${OUT_DIR:-$REPO/gnn_g_clip/runs/train_scaled}"
+OUT_DIR="${OUT_DIR:-$REPO/gnn_sd_edit/runs_v1cld}"
 
 echo "======================================================================"
-echo "  train_scaled_g_clip — n=10/20, N=20/50/100 — $(date)"
+echo "  train_scaled_v1cld_sd_edit — n=10/20, N=20/50/100 — $(date)"
 echo "  Job : ${SLURM_JOB_ID:-local}   Nœud : $(hostname)"
 echo "  N_EPOCHS=$N_EPOCHS  BATCH_SIZE=$BATCH_SIZE  LR=$LR  HIDDEN=$HIDDEN"
-echo "  TARGET_GRAPHS=$TARGET_GRAPHS  ROOT_FRAC=$ROOT_FRAC  RESERVOIR_K=$RESERVOIR_K  N_SCENS=$N_SCENS"
-echo "  USE_MAX_POOL=$USE_MAX_POOL  CENTER_LAM=$CENTER_LAM"
+echo "  TARGET_GRAPHS=$TARGET_GRAPHS  ROOT_FRAC=$ROOT_FRAC  RESERVOIR_K=$RESERVOIR_K  N_SCENS=$N_SCENS  N_LIST=$N_LIST"
+echo "  USE_MAX_POOL=$USE_MAX_POOL"
 echo "  LR_WARMUP_EP=$LR_WARMUP_EP  LR_T0=$LR_T0  LR_T_MULT=$LR_T_MULT"
 echo "  DEPTH_W0=$DEPTH_W0  N_WARMUP=$N_WARMUP  WARMUP_T=$WARMUP_T  WARMUP_MAX_N=$WARMUP_MAX_N"
 echo "  EVAL_EVERY=$EVAL_EVERY  EVAL_MIXED=$EVAL_MIXED  EVAL_SG_T=$EVAL_SG_T  RUN_TAG=$RUN_TAG"
@@ -121,9 +127,6 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-6}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-6}"
 
 # ── Données → SLURM_TMPDIR ────────────────────────────────────────────────────
-# train_base_s10 : n=10/20 × N=20/50/100 dans un seul dossier, un fichier par
-# (n,N) — layout différent de l'ancien train_base_s30/train_N{N} (un dossier
-# par N, n=10 uniquement multi-N). discover_pairs() sait lire les deux.
 echo ""
 echo "=== Copie des données vers SLURM_TMPDIR ==="
 DATA_LOCAL="${SLURM_TMPDIR:-/tmp}/data"
@@ -131,7 +134,7 @@ mkdir -p "$DATA_LOCAL/train_base_s10"
 
 S10="$REPO/data/train_base_s10"
 for N_VAL in $N_SCENS; do
-    for N_VAL_ITEM in 10 20; do
+    for N_VAL_ITEM in $N_LIST; do
         INST="instances_n${N_VAL_ITEM}_m5_N${N_VAL}.txt"
         NODES="nodes_n${N_VAL_ITEM}_m5_N${N_VAL}.txt"
         if [ -f "$S10/$INST" ] && [ -f "$S10/$NODES" ]; then
@@ -154,8 +157,6 @@ LR_T0_ARG=""
 [ "${LR_T0:-0}" != "0" ] && LR_T0_ARG="--lr_T0 ${LR_T0} --lr_T_mult ${LR_T_MULT}"
 NO_SCHEDULER_FLAG=""
 [ "${NO_SCHEDULER:-0}" = "1" ] && NO_SCHEDULER_FLAG="--no_scheduler"
-CENTER_LAM_FLAG=""
-[ "${CENTER_LAM:-1}" = "1" ] && CENTER_LAM_FLAG="--center_lam"
 EVAL_MIXED_FLAG=""
 [ "${EVAL_MIXED:-1}" = "1" ] && EVAL_MIXED_FLAG="--eval_mixed"
 SKIP_QUALITY_FLAG=""
@@ -165,10 +166,10 @@ SKIP_QUALITY_FLAG=""
 echo ""
 echo "=== Lancement — $(date) ==="
 
-python "$REPO/gnn_g_clip/train_scaled_g_clip.py" \
+python "$REPO/gnn_sd_edit/train_scaled_v1CLD_sd_edit.py" \
     --data_dir      "$DATA_LOCAL"        \
     --out_dir       "$OUT_DIR"           \
-    --n_list        10 20                \
+    --n_list        $N_LIST              \
     --n_scens       $N_SCENS             \
     --m             5                    \
     --target_graphs "$TARGET_GRAPHS"     \
@@ -201,7 +202,6 @@ python "$REPO/gnn_g_clip/train_scaled_g_clip.py" \
     $LR_WARMUP_ARG                        \
     $LR_T0_ARG                            \
     $NO_SCHEDULER_FLAG                    \
-    $CENTER_LAM_FLAG                      \
     $EVAL_MIXED_FLAG                      \
     $SKIP_QUALITY_FLAG
 
