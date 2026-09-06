@@ -4,14 +4,23 @@
  *
  * Usage :
  *   bab_mkp_gecode_v1cld_gnn_batched <dataset.txt> <checkpoint.pt> [epsilon=0.1]
- *       [time_limit=-1] [rep=0] [device=cuda] [K=1]
+ *       [time_limit=-1] [rep=0] [device=cuda] [K=1] [stop_after_first_level=0]
  *
  * Comparer directement à bab_mkp_gecode_gnn_batched <dataset> <ckpt_v1ld> ...
  * — même instance, même n/m/N/epsilon, borne V1LD (batché) vs borne V1CLD
  * (batché, ce binaire).
+ *
+ * stop_after_first_level=1 (2026-08-24) : arrête le B&B dès que la borne au
+ * 1er niveau (enfants directs de la racine) est capturée — mesure le gap à
+ * la racine en temps ~constant (indépendant de n/N), SANS attendre la
+ * résolution complète. res.objective devient alors juste le meilleur
+ * incumbent trouvé avant l'arrêt (PAS l'optimum) — comparer
+ * "Borne GNN 1er niveau" à l'optimum connu par ailleurs (ex. résultat ref),
+ * pas à "Valeur optimale" affichée par ce run.
  */
 #include "gecode_bab_v1cld_gnn_batched.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -79,6 +88,7 @@ int main(int argc, char* argv[])
     int    rep         = (argc > 5) ? std::stoi(argv[5]) : 0;
     std::string device = (argc > 6) ? argv[6] : "cuda";
     int    K           = (argc > 7) ? std::stoi(argv[7]) : 1;
+    bool   stop_after_first_level = (argc > 8) ? (std::stoi(argv[8]) != 0) : false;
 
     MKPInst inst = load_song_local(dataset, rep);
 
@@ -95,7 +105,8 @@ int main(int argc, char* argv[])
 
     GNNBatchedBabResult res = solve_gecode_bab_mkp_v1cld_gnn_batched(
         inst.n, inst.m, inst.N, epsilon, inst.c, inst.p, inst.A, inst.b,
-        time_limit, K, ckpt_path, device);
+        time_limit, K, ckpt_path, device,
+        1.0, false, 1, "native", stop_after_first_level);
 
     std::cout << "\n═══════════════════════════════════════════════════\n";
     std::cout << "  RÉSULTATS\n";
@@ -103,7 +114,13 @@ int main(int argc, char* argv[])
     std::cout << std::fixed << std::setprecision(4);
     std::cout << "  Statut                    : " << res.status    << "\n";
     std::cout << "  Valeur optimale           : " << res.objective << "\n";
-    std::cout << "  Incumbent initial (greedy): " << res.greedy_value << "\n\n";
+    std::cout << "  Incumbent initial (greedy): " << res.greedy_value << "\n";
+    if (std::isnan(res.first_level_bound_value)) {
+        std::cout << "  Borne GNN 1er niveau      : N/A (jamais flushée avant arrêt)\n\n";
+    } else {
+        std::cout << "  Borne GNN 1er niveau      : " << res.first_level_bound_value
+                   << "  (" << res.first_level_bound_n_members << " membre(s))\n\n";
+    }
 
     std::cout << std::setprecision(0);
     std::cout << "  Nœuds                     : " << res.nodes << "\n";

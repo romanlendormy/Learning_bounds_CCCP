@@ -79,6 +79,14 @@ struct PendingEntry {
     MKPSpaceGNNBatched*   space;
 };
 
+// Signal d'arrêt anticipé (2026-08-24) : utilisé par stop_after_first_level
+// (cf. header) pour interrompre le B&B dès que first_level_bound_value est
+// capturé, sans attendre la fin de la résolution — permet de mesurer le
+// "gap à la racine" en un temps constant (indépendant de n/N) au lieu du
+// temps de résolution complet, en réutilisant l'optimum déjà connu (ref) côté
+// appelant plutôt que res.objective (jamais atteint dans ce mode).
+struct FirstLevelCapturedSignal {};
+
 } // namespace
 
 GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
@@ -89,7 +97,8 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
     double gnn_max_depth_frac,
     bool use_surrogate_zeta,
     int gnn_node_stride,
-    std::string gnn_backend)
+    std::string gnn_backend,
+    bool stop_after_first_level)
 {
     if (K < 1)
         throw std::invalid_argument("solve_gecode_bab_mkp_v1cld_gnn_batched : K doit être >= 1");
@@ -220,6 +229,7 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
             first_level_bound_value     = first_level_max_ub;
             first_level_bound_n_members = B;
             first_level_captured        = true;
+            if (stop_after_first_level) throw FirstLevelCapturedSignal{};
         }
 
         if (best_leaf_space) {
@@ -229,6 +239,9 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
         }
     };
 
+    bool stopped_after_first_level = false;
+
+    try {
     {
         MKPSpaceGNNBatched* root = new MKPSpaceGNNBatched(&shared);
         SpaceStatus rst = root->status();
@@ -344,6 +357,9 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
         delete c_choice;
         delete space;
     }
+    } catch (const FirstLevelCapturedSignal&) {
+        stopped_after_first_level = true;
+    }
 
     std::fprintf(stderr,
         "[zstats] noeuds x-branching=%lld  avec>=1 z fixe=%lld (%.2f%%)  "
@@ -396,6 +412,11 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
         res.optimal  = false;
         res.status   = timed_out ? "TIMEOUT" : "INFEASIBLE";
     }
+    // stop_after_first_level : res.objective ci-dessus n'est PAS l'optimum (à
+    // usage diagnostique uniquement — meilleur incumbent trouvé avant l'arrêt
+    // anticipé, cf. header) ; comparer first_level_bound_value à l'optimum
+    // connu par ailleurs (ex. résultat ref), pas à res.objective.
+    if (stopped_after_first_level) res.status = "FIRST_LEVEL_ONLY";
 
     return res;
 }

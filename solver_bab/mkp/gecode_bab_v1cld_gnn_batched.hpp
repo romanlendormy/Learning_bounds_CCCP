@@ -29,4 +29,5 @@ GNNBatchedBabResult solve_gecode_bab_mkp_v1cld_gnn_batched(
     double gnn_max_depth_frac = 1.0,
     bool use_surrogate_zeta = false,
     int gnn_node_stride = 1,
-    std::string gnn_backend = "native");
+    std::string gnn_backend = "native",
+    bool stop_after_first_level = false);
