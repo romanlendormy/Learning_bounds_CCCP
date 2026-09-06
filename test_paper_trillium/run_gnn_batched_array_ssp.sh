@@ -1,7 +1,7 @@
 #!/bin/bash
 # run_gnn_batched_array_ssp.sh — mode gnn_batched V1CLD (K=8, backend natif
 # TorchScript, device cuda) sur les 270 instances de test_paper_trillium/ssp/,
-# une tâche d'array par instance (instances_list_ssp.txt : E T N rep chemin_relatif).
+# une tâche d'array par instance (instances_list.txt : E T N rep chemin_relatif).
 #
 # K=8 : valeur "de production" retenue le 20 août (sweep_ref_vs_gnn_batched_gpu.sh)
 # précisément pour cette grille -- K=32 est plus rapide sur petites instances
@@ -65,7 +65,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 TESTDIR="$REPO/test_paper_trillium"
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TESTDIR/instances_list_ssp.txt")
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TESTDIR/instances_list.txt")
 read -r E T N REP RELPATH <<< "$LINE"
 DATASET="$TESTDIR/$RELPATH"
 

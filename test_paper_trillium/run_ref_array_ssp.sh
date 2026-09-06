@@ -1,7 +1,7 @@
 #!/bin/bash
 # run_ref_array_ssp.sh — mode ref (squelette nu, sans borne) sur les 270
 # instances de test_paper_trillium/ssp/, une tâche d'array par instance
-# (test_paper_trillium/instances_list_ssp.txt, format : E T N rep chemin_relatif).
+# (test_paper_trillium/instances_list.txt, format : E T N rep chemin_relatif).
 # CPU seul (ref n'appelle jamais le GNN) -- mais on réserve tout de même un
 # GPU H100 dédié + le même profil CPU/RAM que le job gnn_batched
 # (run_gnn_batched_array_ssp.sh), décision explicite de l'utilisateur du
@@ -48,7 +48,7 @@ source solver_bab/setup_gpu_env.sh
 source "$HOME/envs/learning_bounds/bin/activate"
 
 TESTDIR="$REPO/test_paper_trillium"
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TESTDIR/instances_list_ssp.txt")
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TESTDIR/instances_list.txt")
 read -r E T N REP RELPATH <<< "$LINE"
 DATASET="$TESTDIR/$RELPATH"
 

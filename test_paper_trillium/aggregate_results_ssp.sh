@@ -27,7 +27,7 @@ if [[ "$N_REF" -lt 270 || "$N_GNN" -lt 270 ]]; then
     echo ""
     echo "ATTENTION : incomplet. Instances manquantes :"
     awk '{print "ref_E" $1 "_T" $2 "_N" $3 "_rep" $4; print "gnn_batched_E" $1 "_T" $2 "_N" $3 "_rep" $4}' \
-        "$TESTDIR/instances_list_ssp.txt" | sort > /tmp/expected_results_ssp_$$.txt
+        "$TESTDIR/instances_list.txt" | sort > /tmp/expected_results_ssp_$$.txt
     ls "$TESTDIR"/results | sed 's/\.csv$//' | sort > /tmp/actual_results_ssp_$$.txt
     comm -23 /tmp/expected_results_ssp_$$.txt /tmp/actual_results_ssp_$$.txt || true
     rm -f /tmp/expected_results_ssp_$$.txt /tmp/actual_results_ssp_$$.txt

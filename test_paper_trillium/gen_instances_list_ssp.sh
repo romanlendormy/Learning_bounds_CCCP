@@ -1,5 +1,5 @@
 #!/bin/bash
-# gen_instances_list_ssp.sh — (re)génère test_paper_trillium/instances_list_ssp.txt
+# gen_instances_list_ssp.sh — (re)génère test_paper_trillium/instances_list.txt
 # à partir des dossiers ssp/E{E}_T{T}_N{N}/rep{0..9} déjà présents sur disque.
 # Format d'une ligne : "E T N rep chemin_relatif" (cf. run_ref_array_ssp.sh /
 # run_gnn_batched_array_ssp.sh, même convention que test_paper/instances_list.txt
@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-OUT="instances_list_ssp.txt"
+OUT="instances_list.txt"
 > "$OUT"
 missing=0
 for E in 4 6 8; do
