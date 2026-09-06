@@ -47,6 +47,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <numeric>
@@ -71,13 +73,21 @@ static constexpr int SSP_BAB_SIGMA_W    = 3;
 //         (zone jamais vue à l'entraînement, cf. discussion 2026-08-18 :
 //         borne reste valide dans tous les cas — la preuve tient pour tout λ
 //         — mais peut y être lâche).
+// GNN_ROOT : même inférence GNN one-shot que GNN, mais UNE SEULE FOIS (au
+//         premier appel more() de chaque lignée, cf. lambda_warmed) — tous
+//         les appels suivants se comportent comme REF (aucune borne
+//         recalculée/postée). Mirroir exact de BoundMode::GNN_ROOT côté MKP
+//         (gecode_bab.hpp) — sert à obtenir la borne GNN "root-only" comparée
+//         à la trace de convergence du sous-gradient V1CLD (cf.
+//         gnn_compare_bound ci-dessous, expérience GNN-vs-sous-gradient t*
+//         portée de CCMKP vers CCSSP).
 // REF   : squelette nu (même mirroir que BoundMode::REF côté MKP, cf.
 //         gecode_bab.hpp mkp) — même classe, même heuristique de branchement,
 //         même moteur, même amorçage d'incumbent, mais more() ne reconstruit
 //         AUCUN masque et ne calcule/poste AUCUNE borne. Sert de référence
 //         pour isoler l'effet de la borne seule (écart REF vs GNN/V1CLD) de
 //         celui du branchement/moteur (écart Gecode de base vs REF).
-enum class SSPBoundMode { V1LD, V1CLD, GNN, REF };
+enum class SSPBoundMode { V1LD, V1CLD, GNN, GNN_ROOT, REF };
 
 // ── Heuristique de branchement du BoundBrancher ──────────────────────────────
 // RATIO    : ordre data->branch_order (score demande/salaire), valeur W en
@@ -136,15 +146,33 @@ struct SSPSharedData {
     SSPBoundMode      bound_mode      = SSPBoundMode::V1LD;
     SSPBranchHeuristic branch_heuristic = SSPBranchHeuristic::SIZE_MIN;
 
-    // Mode GNN uniquement (bound_mode == SSPBoundMode::GNN) — backend chargé
-    // et possédé par l'appelant (cf. main_gecode.cpp côté MKP, même
-    // convention : SSPSharedData ne construit/ne détruit jamais le modèle).
-    // Requis (non nullptr) si bound_mode == GNN, ignoré sinon.
+    // Mode GNN/GNN_ROOT (bound_mode == SSPBoundMode::GNN ou GNN_ROOT) —
+    // backend chargé et possédé par l'appelant (cf. main_gecode.cpp côté MKP,
+    // même convention : SSPSharedData ne construit/ne détruit jamais le
+    // modèle). Requis (non nullptr) si bound_mode == GNN/GNN_ROOT, ignoré sinon.
     SSPGNNBoundBackend* gnn_client = nullptr;
     int    T_root     = 200;
     int    T_node     = 30;
     double rel_tol    = 1e-4;
     int    tol_window = 30;
+
+    // gnn_compare_bound : arrêt anticipé du sous-gradient V1CLD À LA RACINE
+    // (is_first) dès que la borne courante (convention coût réel, même
+    // échelle que root_bound_value) atteint cette valeur — typiquement la
+    // borne déjà obtenue par un forward GNN_ROOT sur la même instance, passée
+    // via la variable d'env GNN_COMPARE_BOUND (lue dans solve_gecode_bab_ssp,
+    // gecode_bab_ssp.cpp). 1e18 (défaut) = désactivé (jamais atteint,
+    // comportement historique inchangé). Ignoré aux nœuds suivants (T_node) —
+    // la comparaison au GNN ne concerne que la racine, et ignoré en V1LD (pas
+    // porté, cf. portée de l'expérience GNN-vs-sous-gradient t* : V1CLD
+    // uniquement côté SSP). Mirroir de MKPSharedData::gnn_compare_bound
+    // (gecode_bab.hpp mkp) — MAIS conversion différente vers l'échelle
+    // interne à solve_v1cld : SSP maximise en interne cost^T x = −salaire
+    // (cf. docstring de fichier ci-dessus, "Convention de signe"), donc
+    // target_bound = −gnn_compare_bound (pas gnn_compare_bound − fp comme
+    // MKP, qui n'a pas cette inversion de signe et where fp est déjà
+    // intégré au masque plutôt que factorisé à part côté SSP).
+    double gnn_compare_bound = 1e18;
 
     // Ablation : faut-il calculer/poster la borne Lagrangienne dans more()
     // (sinon on garde le même arbre/branchement — toujours l'ordre ratio —
@@ -486,6 +514,17 @@ public:
             return;
         }
 
+        // Mode GNN_ROOT : la borne n'est calculée qu'UNE FOIS par lignée (au
+        // premier appel more(), cf. lambda_warmed hérité par clonage — même
+        // notion de "premier appel" que is_first plus bas). Une fois
+        // lambda_warmed==true, on se comporte comme REF : même court-circuit
+        // AVANT le scan des variables (mirroir exact de BoundMode::GNN_ROOT
+        // côté MKP, gecode_bab.hpp).
+        if (data->bound_mode == SSPBoundMode::GNN_ROOT && lambda_warmed) {
+            data->more_calls++;
+            return;
+        }
+
         const int E = data->E, T = data->T;
 
         Vec2i mask(E, Vec1i(T, -1));
@@ -548,13 +587,47 @@ public:
                                    E, mask);
             data->t_v1cld_problem_build_s +=
                 std::chrono::duration<double>(Clock::now() - t_pb0).count();
-            V1CLDResult res = solve_v1cld(prob, T_iters, 0, false, remaining,
+            // log_interval=1 UNIQUEMENT à la racine (is_first) : res.convergence
+            // porte alors la trace complète L1(t) pour t=0..T_root-1, dumpée
+            // ci-dessous sous ROOT_SUBGRAD_TRACE (comparaison au forward GNN
+            // root-only, mirroir du mécanisme MKP — gecode_bab.hpp). Aux
+            // nœuds suivants (T_node), log_interval reste à 0 (comportement
+            // de production inchangé).
+            // target_bound : cf. doc SSPSharedData::gnn_compare_bound —
+            // uniquement à la racine (is_first). Conversion vers la
+            // convention interne max(−salaire) de solve_v1cld : PAS une
+            // simple différence comme côté MKP (pas de terme fp séparé ici,
+            // le masque encode déjà tout le sous-problème résiduel), mais une
+            // inversion de signe (cf. docstring de fichier ci-dessus,
+            // "Convention de signe"). Désactivé (1e18, jamais atteint) si
+            // gnn_compare_bound est encore au sentinel 1e18 par défaut, ou
+            // hors racine.
+            double target_bound = (is_first && data->gnn_compare_bound < 1e17)
+                                       ? -data->gnn_compare_bound
+                                       : 1e18;
+            V1CLDResult res = solve_v1cld(prob, T_iters, is_first ? 1 : 0, false, remaining,
                                           data->rel_tol, data->tol_window, -1e18,
-                                          lambda_v1cld);
+                                          lambda_v1cld, target_bound);
             data->t_v1cld_zeta_theta_s += res.t_zeta_theta_s;
             data->v1cld_iters_total    += res.iterations_run;
             lambda_v1cld = std::move(res.lambda_star);
             dual_val     = res.v1CLD_star;
+
+            // Trace opt-in (ROOT_SUBGRAD_TRACE=1) : best_upper(t) = meilleur
+            // (min) L1 vu jusqu'à l'itération t, reconverti en convention
+            // coût réel (opposé, cf. "Convention de signe" ci-dessus) — même
+            // quantité que root_bound_value, mais à CHAQUE itération plutôt
+            // que seulement à la fin. Sert à trouver
+            // t* = min{t : best_upper(t) >= borne_GNN_root} en
+            // post-traitement (aucun coût si la variable d'env est absente).
+            if (is_first && std::getenv("ROOT_SUBGRAD_TRACE")) {
+                double running_best = 1e18;
+                for (size_t t = 0; t < res.convergence.size(); ++t) {
+                    running_best = std::min(running_best, res.convergence[t]);
+                    std::fprintf(stderr, "SUBGRAD_TRACE,v1cld,%zu,%.6f\n",
+                                 t + 1, -running_best);
+                }
+            }
         } else {
             // Mode GNN : un seul forward pass, pas d'itération/warm-start (cf.
             // docstring SSPBoundMode::GNN). x_mask/z_mask reconstruits en

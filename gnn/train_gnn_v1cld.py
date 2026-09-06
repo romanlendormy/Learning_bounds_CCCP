@@ -726,12 +726,17 @@ def lagrangian_v1cld(lam: torch.Tensor, data: pyg_data.Data) -> torch.Tensor:
     inv_m  = 1.0 / m
     p_ij   = p_unif * inv_m
 
-    # ── (A) Λ_sum = Σ_{i free, j} λ[i,j] ────────────────────────────────────
-    Lambda_sum = lam_3d.sum(dim=(0, 1))                    # (n_g,)
+    # ── (A) Λ_sum_i = Σ_j λ[i,j]  — PAR SCÉNARIO (pas sur i ET j ensemble) ──
+    # FIX (2026-08-13) : miroir du fix SSP (gnn_ssp/train_v1CLD_ssp.py) et du
+    # fix C++ (solver_generic/v1cld_solver.cpp) -- cf.
+    # PREUVE_v1CLD_centrage_par_scenario.md. Le centrage global (dim=(0,1))
+    # n'annule le terme libre en X̄ que globalement, pas scénario par
+    # scénario -- condition nécessaire pour la dualité faible par scénario.
+    Lambda_sum_i = lam_3d.sum(dim=1)                       # (N_z, n_g)
 
-    # ── (B) cost_{i,j}[k] = c[k] + λ[i,j,k] / p_ij − Λ_sum[k] ─────────────
+    # ── (B) cost_{i,j}[k] = c[k] + λ[i,j,k]/p_ij − Λ_sum_i[i,k]/p_i ───────
     c_brd = c_g.unsqueeze(0).unsqueeze(0)                  # (1, 1, n_g)
-    L_brd = Lambda_sum.unsqueeze(0).unsqueeze(0)           # (1, 1, n_g)
+    L_brd = (Lambda_sum_i / p_unif).unsqueeze(1)           # (N_z, 1, n_g)
     cost  = c_brd + lam_3d / p_ij - L_brd                 # (N_z, m, n_g)
 
     # ── Sous-problèmes (hors graphe) ──────────────────────────────────────────
@@ -833,11 +838,13 @@ def verify_v1cld(
     n_iters = T
 
     for t in range(T):
-        # (A) Λ_sum
-        Lsum = lam.sum(axis=(0, 1))                            # (n_g,)
+        # (A) Λ_sum_i — FIX (2026-08-13) : PAR SCÉNARIO, pas global (dim=(0,1)).
+        # Miroir du fix dans lagrangian_v1cld ci-dessus et dans
+        # solver_generic/v1cld_solver.cpp -- cf. PREUVE_v1CLD_centrage_par_scenario.md.
+        Lsum_i = lam.sum(axis=1)                                # (N_z, n_g)
 
         # (B) cost, θ, ζ
-        cost = c_np + lam / p_ij - Lsum                       # (N_z, m, n_g)
+        cost = c_np + lam / p_ij - (Lsum_i / p_unif)[:, None, :]  # (N_z, m, n_g)
 
         x_theta = np.zeros((N_z, m, n_g), dtype=np.float64)
         x_zeta  = np.zeros((N_z, m, n_g), dtype=np.float64)

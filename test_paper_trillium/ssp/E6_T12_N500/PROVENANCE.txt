@@ -10,3 +10,6 @@ rep6=generated ep_id=6
 rep7=generated ep_id=7
 rep8=generated ep_id=8
 rep9=generated ep_id=9
+rep1=regenerated_after_ref_infeasible ep_id=1001 date=2026-08-23T04:10:57-04:00
+rep2=regenerated_after_ref_infeasible ep_id=1002 date=2026-08-23T04:11:01-04:00
+rep6=regenerated_after_ref_infeasible ep_id=1006 date=2026-08-23T04:11:06-04:00

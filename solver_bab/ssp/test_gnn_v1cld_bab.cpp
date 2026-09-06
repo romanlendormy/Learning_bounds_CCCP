@@ -15,12 +15,29 @@
  * compte ici.
  *
  * Usage :
- *   test_gnn_v1cld_bab <test_dir> <checkpoint_path> <expected_opt> [time_lim_s] [mode] [device]
- * mode : "gnn" (défaut), "v1cld" ou "ref" -- "v1cld"/"ref" ignorent
- * checkpoint_path (peut être n'importe quelle chaîne, jamais lu).
- * device (mode "gnn" seulement) : "cpu" (défaut) ou "cuda" -- ajouté
+ *   test_gnn_v1cld_bab <test_dir> <checkpoint_path> <expected_opt> [time_lim_s] [mode] [device] [T_root] [T_node]
+ * mode : "gnn" (défaut), "gnn_root", "v1cld" ou "ref" -- "v1cld"/"ref"
+ * ignorent checkpoint_path (peut être n'importe quelle chaîne, jamais lu).
+ * device (mode "gnn"/"gnn_root" seulement) : "cpu" (défaut) ou "cuda" -- ajouté
  * 2026-08-20 pour isoler l'effet du device seul (binaire compilé avec
  * -DGNN_DEVICE=cuda requis, cf. solver_bab/setup_gpu_env.sh).
+ * T_root/T_node (défaut 200/30, argv 7/8) : budget sous-gradient V1LD/V1CLD
+ * -- CLI plutôt que codé en dur, ajouté pour l'expérience GNN-vs-sous-gradient
+ * t* (cf. GNN_COMPARE_BOUND/ROOT_SUBGRAD_TRACE ci-dessous), où la racine
+ * (T_root, plafond type 300) et les nœuds suivants (T_node=1, sans intérêt
+ * une fois la racine seule comparée) ont besoin de budgets très différents de
+ * la config de production (200/30) -- même piège évité que côté MKP (laisser
+ * T_node=30 explose le temps une fois sorti de la racine, pour un résultat
+ * inexploité ici). Ignoré en mode gnn/gnn_root/ref (pas de sous-gradient).
+ * "gnn_root" (mirroir de BoundMode::GNN_ROOT côté MKP) : même forward GNN
+ * one-shot que "gnn", mais UNE SEULE FOIS à la racine -- REF ensuite (more()
+ * court-circuite, cf. gecode_bab_ssp.hpp). Sert à obtenir une borne GNN
+ * "root-only" à comparer à la trace de convergence V1CLD (variables d'env
+ * GNN_COMPARE_BOUND=<borne> pour arrêter le sous-gradient dès qu'il la
+ * dépasse, ROOT_SUBGRAD_TRACE=1 pour dumper la trace complète sur stderr --
+ * cf. doc SSPSharedData::gnn_compare_bound, gecode_bab_ssp.hpp). La borne est
+ * imprimée ci-dessous via root_bound_value=%.6f, grep-able par un script
+ * d'orchestration (même convention que "Borne UB à la racine" côté MKP).
  * "v1cld" compare à la borne sous-gradient EXISTANTE (déjà en production) sur
  * la MÊME instance, même budget, même heuristique -- cf. discussion
  * 2026-08-19 : jamais fait avant ce test, alors que c'est la comparaison qui
@@ -59,7 +76,7 @@ static double cpu_time_now_s() {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: %s <test_dir> <checkpoint_path> <expected_opt> [time_lim_s] [mode]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <test_dir> <checkpoint_path> <expected_opt> [time_lim_s] [mode] [device] [T_root] [T_node]\n", argv[0]);
         return 2;
     }
     std::string test_dir = argv[1];
@@ -68,6 +85,8 @@ int main(int argc, char** argv) {
     double time_lim = (argc > 4) ? std::atof(argv[4]) : 60.0;
     std::string mode = (argc > 5) ? argv[5] : "gnn";
     std::string device = (argc > 6) ? argv[6] : "cpu";
+    int T_root = (argc > 7) ? std::atoi(argv[7]) : 200;
+    int T_node = (argc > 8) ? std::atoi(argv[8]) : 30;
 
     try {
         SSPInstance inst = load_ssp_instance(test_dir);
@@ -83,7 +102,7 @@ int main(int argc, char** argv) {
                 inst.transitions, inst.accepting, inst.initial,
                 inst.salary, inst.demand, inst.p,
                 /*time_lim=*/time_lim,
-                /*T_root=*/200, /*T_node=*/30,
+                /*T_root=*/T_root, /*T_node=*/T_node,
                 /*bound_mode=*/SSPBoundMode::GNN,
                 /*rel_tol=*/1e-4, /*tol_window=*/30,
                 /*use_lagrangian_bound=*/true,
@@ -102,13 +121,30 @@ int main(int argc, char** argv) {
             std::printf("[gnn_timing] lagrangian_rest: %8.3fs (%.1f%%)\n",
                         qt.t_lagrangian_rest_s, 100.0 * qt.t_lagrangian_rest_s / std::max(t_query_sum, 1e-9));
             std::printf("[gnn_timing] somme query()  : %8.3fs\n", t_query_sum);
+        } else if (mode == "gnn_root") {
+            // Mode GNN_ROOT : même backend natif que "gnn", même construction
+            // -- seul bound_mode change (more() court-circuite après le
+            // premier appel, cf. gecode_bab_ssp.hpp). cumulative_timing()
+            // reflète alors un seul query() (pas de moyenne sur tout l'arbre).
+            GNNV1CLDNative gnn(checkpoint_path, device, inst);
+            res = solve_gecode_bab_ssp(
+                inst.E, inst.T, inst.N, inst.epsilon,
+                inst.transitions, inst.accepting, inst.initial,
+                inst.salary, inst.demand, inst.p,
+                /*time_lim=*/time_lim,
+                /*T_root=*/T_root, /*T_node=*/T_node,
+                /*bound_mode=*/SSPBoundMode::GNN_ROOT,
+                /*rel_tol=*/1e-4, /*tol_window=*/30,
+                /*use_lagrangian_bound=*/true,
+                /*branch_heuristic=*/SSPBranchHeuristic::SIZE_MIN,
+                /*gnn_client=*/&gnn);
         } else if (mode == "v1cld") {
             res = solve_gecode_bab_ssp(
                 inst.E, inst.T, inst.N, inst.epsilon,
                 inst.transitions, inst.accepting, inst.initial,
                 inst.salary, inst.demand, inst.p,
                 /*time_lim=*/time_lim,
-                /*T_root=*/200, /*T_node=*/30,
+                /*T_root=*/T_root, /*T_node=*/T_node,
                 /*bound_mode=*/SSPBoundMode::V1CLD,
                 /*rel_tol=*/1e-4, /*tol_window=*/30,
                 /*use_lagrangian_bound=*/true,
@@ -141,14 +177,14 @@ int main(int argc, char** argv) {
                 inst.transitions, inst.accepting, inst.initial,
                 inst.salary, inst.demand, inst.p,
                 /*time_lim=*/time_lim,
-                /*T_root=*/200, /*T_node=*/30,
+                /*T_root=*/T_root, /*T_node=*/T_node,
                 /*bound_mode=*/SSPBoundMode::REF,
                 /*rel_tol=*/1e-4, /*tol_window=*/30,
                 /*use_lagrangian_bound=*/true,
                 /*branch_heuristic=*/SSPBranchHeuristic::SIZE_MIN,
                 /*gnn_client=*/nullptr);
         } else {
-            std::fprintf(stderr, "mode inconnu : %s (attendu gnn|v1cld|ref)\n", mode.c_str());
+            std::fprintf(stderr, "mode inconnu : %s (attendu gnn|gnn_root|v1cld|ref)\n", mode.c_str());
             return 2;
         }
 

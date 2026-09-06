@@ -8,7 +8,9 @@
 
 #include "gecode_bab_ssp.hpp"
 
+#include <cstdlib>
 #include <limits>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -42,6 +44,17 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     shared.use_lagrangian_bound = use_lagrangian_bound;
     shared.branch_heuristic     = branch_heuristic;
     shared.gnn_client           = gnn_client;
+
+    // GNN_COMPARE_BOUND : opt-in (variable d'env, même pattern que
+    // ROOT_SUBGRAD_TRACE) — cf. doc SSPSharedData::gnn_compare_bound.
+    // Absent/non-parsable → 1e18 (désactivé, comportement historique).
+    if (const char* env_bound = std::getenv("GNN_COMPARE_BOUND")) {
+        try {
+            shared.gnn_compare_bound = std::stod(env_bound);
+        } catch (const std::exception&) {
+            shared.gnn_compare_bound = 1e18;
+        }
+    }
 
     SSPSpaceBnB* model = new SSPSpaceBnB(&shared);
 

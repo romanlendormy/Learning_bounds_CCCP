@@ -9,6 +9,7 @@
  */
 #include "ssp_loader.hpp"
 #include "../../solver_generic/ssp/ssp_cld_problem_bnb.hpp"
+#include "../../solver_generic/ssp/ssp_problem_bnb.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -241,6 +242,159 @@ int main(int argc, char** argv) {
     std::cout << "  knapsack_val = " << knapsack_val << "\n";
     std::cout << "  L1           = " << L1 << "\n";
     std::cout << "  lb_salary    = " << -L1 << "\n";
+
+    // ── TEST HYPOTHESE (2026-08-12) : Delta_i = max_j(delta_ij) au lieu de
+    // (1/m) Sum_j(delta_ij) -- meme theta_vals/theta part de L1, seule la
+    // selection y* (via Delta_i) et le terme soustrait changent.
+    {
+        Vec1d delta_max(NN, 0.0);
+        for (int i = 0; i < NN; ++i) {
+            double m = 0.0;
+            for (int j = 0; j < mm; ++j) m = std::max(m, delta_ij[i][j]);
+            delta_max[i] = m;
+        }
+        std::vector<int> order_max(NN);
+        for (int i = 0; i < NN; ++i) order_max[i] = i;
+        std::sort(order_max.begin(), order_max.end(),
+                  [&](int a, int b){ return delta_max[a] < delta_max[b]; });
+        double cumsum_max = 0.0, knapsack_val_max = 0.0;
+        for (int idx : order_max) {
+            cumsum_max += inst.p[idx];
+            knapsack_val_max += inst.p[idx] * delta_max[idx];
+            if (cumsum_max >= 1.0 - inst.epsilon - 1e-9) break;
+        }
+        double L1_max = -knapsack_val_max;
+        for (int i = 0; i < NN; ++i)
+            for (int j = 0; j < mm; ++j)
+                L1_max += inst.p[i] * inv_m * theta_vals[i][j];
+        std::cout << "\nVariante Delta_i = max_j(delta_ij) (au lieu de (1/m)Sum_j) :\n";
+        std::cout << "  knapsack_val = " << knapsack_val_max << "\n";
+        std::cout << "  L1           = " << L1_max << "\n";
+        std::cout << "  lb_salary    = " << -L1_max << "\n";
+    }
+
+    // ── TEST DECISIF (2026-08-13) : centrage PAR SCENARIO (Sum_j lam[i][j]=0
+    // pour CHAQUE i) au lieu du centrage GLOBAL (Lambda_sum sur (i,j) ensemble)
+    // -- cf. preuve : theta_j/zeta_j ne sont des sur-estimes valides de
+    // theta_i/zeta_i QUE sous cette condition. p_ij est constant en j pour i
+    // fixe, donc cost2_ij[k] = c[k] + (lam[i][j][k] - lam_bar_i[k])/p_ij,
+    // ou lam_bar_i[k] = moyenne sur j de lam[i][j][k] -- le terme Lambda_sum
+    // global disparait algebriquement.
+    {
+        Vec2d theta2(NN, Vec1d(mm)), zeta2(NN, Vec1d(mm));
+        double min_raw2 = 1e30;
+        int n_negative2 = 0;
+        for (int i = 0; i < NN; ++i) {
+            double p_ij = inst.p[i] * inv_m;
+            Vec1d lam_bar_i(d, 0.0);
+            for (int j = 0; j < mm; ++j)
+                for (int k = 0; k < d; ++k)
+                    lam_bar_i[k] += lam[i][j][k];
+            for (int k = 0; k < d; ++k) lam_bar_i[k] *= inv_m;
+
+            for (int j = 0; j < mm; ++j) {
+                Vec1d cost2_ij(d);
+                for (int k = 0; k < d; ++k)
+                    cost2_ij[k] = c[k] + (lam[i][j][k] - lam_bar_i[k]) / p_ij;
+
+                auto [vt2, xt2] = prob.solve_theta(j, cost2_ij);
+                auto [vz2, xz2] = prob.solve_zeta(i, j, cost2_ij);
+                theta2[i][j] = vt2;
+                zeta2[i][j]  = vz2;
+                double raw2 = vt2 - vz2;
+                if (raw2 < min_raw2) min_raw2 = raw2;
+                if (raw2 < -1e-6) n_negative2++;
+            }
+        }
+        std::cout << "\n=== Centrage par scenario (Sum_j lam[i][j]=0 pour chaque i) ===\n";
+        std::cout << "min (theta2_ij - zeta2_ij) = " << min_raw2
+                  << "  (" << n_negative2 << " paires negatives sur " << (NN * mm) << ")\n";
+        {
+            double min_t = 1e300, max_t = -1e300, min_z = 1e300, max_z = -1e300;
+            int n_inf_t = 0, n_inf_z = 0;
+            for (int i = 0; i < NN; ++i)
+                for (int j = 0; j < mm; ++j) {
+                    min_t = std::min(min_t, theta2[i][j]); max_t = std::max(max_t, theta2[i][j]);
+                    min_z = std::min(min_z, zeta2[i][j]);  max_z = std::max(max_z, zeta2[i][j]);
+                    if (theta2[i][j] < -1e29) n_inf_t++;
+                    if (zeta2[i][j]  < -1e29) n_inf_z++;
+                }
+            std::cout << "theta2 range=[" << min_t << ", " << max_t << "]  n_inf=" << n_inf_t << "\n";
+            std::cout << "zeta2  range=[" << min_z << ", " << max_z << "]  n_inf=" << n_inf_z << "\n";
+            for (int i = 0; i < NN; ++i)
+                for (int j = 0; j < mm; ++j)
+                    if (zeta2[i][j] < -1e29)
+                        std::cout << "  -> scenario infeasible : i=" << i << " j=" << j << "\n";
+        }
+
+        Vec1d delta2(NN, 0.0);
+        for (int i = 0; i < NN; ++i) {
+            double sum = 0.0;
+            for (int j = 0; j < mm; ++j) sum += (theta2[i][j] - zeta2[i][j]);
+            delta2[i] = inv_m * sum;
+        }
+        std::vector<int> order2(NN);
+        for (int i = 0; i < NN; ++i) order2[i] = i;
+        std::sort(order2.begin(), order2.end(),
+                  [&](int a, int b){ return delta2[a] < delta2[b]; });
+        double cumsum2 = 0.0, knapsack_val2 = 0.0;
+        std::cout << "  selection (delta2 croissant) : ";
+        for (int idx : order2) {
+            cumsum2 += inst.p[idx];
+            knapsack_val2 += inst.p[idx] * delta2[idx];
+            std::cout << idx << "(d=" << delta2[idx] << ") ";
+            if (cumsum2 >= 1.0 - inst.epsilon - 1e-9) break;
+        }
+        std::cout << "\n  n_scenarios total=" << NN << "  requis (1-eps)*N=" << (1.0-inst.epsilon)*NN << "\n";
+        double L1_2 = -knapsack_val2;
+        for (int i = 0; i < NN; ++i)
+            for (int j = 0; j < mm; ++j)
+                L1_2 += inst.p[i] * inv_m * theta2[i][j];
+
+        double sal_ub_raw = 0.0;
+        for (int t = 0; t < T; ++t) sal_ub_raw += std::max(0.0, inst.salary[t]);
+        sal_ub_raw *= E;
+
+        std::cout << "  knapsack_val = " << knapsack_val2 << "\n";
+        std::cout << "  L1           = " << L1_2 << "\n";
+        std::cout << "  lb_salary    = " << -L1_2 << "\n";
+        std::cout << "  sal_ub (plafond universel, E*Sum_t salaire_t) = " << sal_ub_raw << "\n";
+        if (-L1_2 > sal_ub_raw + 1e-6)
+            std::cout << "  *** TOUJOURS INVALIDE (lb_salary > sal_ub) ***\n";
+        else
+            std::cout << "  *** VALIDE (lb_salary <= sal_ub) ***\n";
+
+        // ── TEST DECISIF (2026-08-13) : verification DIRECTE de l'inegalite de
+        // dualite faible theta_i(0) <= mean_j theta2_ij(lambda) et
+        // zeta_i(0) <= mean_j zeta2_ij(lambda), pour lambda=0 EXACT (pas de
+        // correction du tout) -- theta_i(0) = solve_theta(*, c) (j ignore),
+        // zeta_i(0) = VRAI joint (les 8 contraintes ensemble, solveur v1LD/
+        // CP-SAT), pour chaque scenario SELECTIONNE. Si l'inegalite est
+        // fausse pour un i, la preuve de dualite faible a un trou reel ici,
+        // pas juste un probleme de magnitude de lambda.
+        std::cout << "\n=== Verification directe theta_i(0) / zeta_i(0) (lambda=0) ===\n";
+        {
+            SSPProblemBnB prob_v1ld(inst.transitions, inst.accepting, inst.initial,
+                                     inst.salary, inst.demand, inst.p, inst.epsilon, E, mask);
+            auto [theta0, xt0] = prob.solve_theta(0, c);  // j ignore ; meme pour tout i
+            std::cout << "theta_i(0) = " << theta0 << "  (identique pour tout i)\n";
+            for (int idx : order2) {
+                double mean_theta2 = 0.0, mean_zeta2 = 0.0;
+                for (int j = 0; j < mm; ++j) { mean_theta2 += theta2[idx][j]; mean_zeta2 += zeta2[idx][j]; }
+                mean_theta2 *= inv_m; mean_zeta2 *= inv_m;
+                auto [zeta0, xz0] = prob_v1ld.solve_zeta(idx, c);  // vrai joint, 8 contraintes ensemble
+                bool ok_theta = (theta0 <= mean_theta2 + 1e-6);
+                bool ok_zeta  = (zeta0  <= mean_zeta2  + 1e-6);
+                std::cout << "  i=" << idx
+                          << "  zeta_i(0)=" << zeta0
+                          << "  mean_zeta2=" << mean_zeta2
+                          << "  [" << (ok_zeta ? "OK" : "*** VIOLE ***") << "]"
+                          << "   mean_theta2=" << mean_theta2
+                          << "  [" << (ok_theta ? "OK" : "*** VIOLE ***") << "]"
+                          << "\n";
+            }
+        }
+    }
 
     // ── Verification force brute du knapsack glouton (min_z) ─────────────────
     // knapsack_min (v1cld_solver.cpp) trie par effective_delta croissant et

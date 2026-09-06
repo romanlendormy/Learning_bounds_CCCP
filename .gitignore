@@ -70,6 +70,7 @@ gnn/*.png
 # Checkpoints GNN (volumineux, recréables via les scripts d'entraînement)
 gnn/runs/
 gnn_sd_edit/runs/
+gnn_sd_edit/runs_v1cld/
 gnn_ssp/runs/
 
 # Résultats de benchmark (recréables via les scripts run_bench_*)

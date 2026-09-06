@@ -38,6 +38,7 @@ find_package(pybind11 CONFIG QUIET)
 add_library(v1ld_generic_core STATIC
     v1ld_solver.cpp
     v1cld_solver.cpp
+    v1cld_solver_parallel.cpp
     mkp/mkp_problem.cpp
     mkp/mkp_problem_bnb.cpp
     mkp/mkp_problem_bnb_surrogate.cpp

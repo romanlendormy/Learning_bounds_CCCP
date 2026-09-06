@@ -679,6 +679,60 @@ target_link_libraries(debug_root_bound PRIVATE
 
 target_compile_options(debug_root_bound PRIVATE -O3 -march=native)
 
+# ── Exécutable campaign_v1ld_v1cld_vs_ref (campagne V1LD vs V1CLD sur
+#    test_paper_trillium/ssp/, avec B&B REF exact comme référence
+#    d'optimalité -- cf. solver_bab/ssp/campaign_v1ld_v1cld_vs_ref.cpp) ──────
+add_executable(campaign_v1ld_v1cld_vs_ref
+    ssp/campaign_v1ld_v1cld_vs_ref.cpp
+    ssp/gecode_bab_ssp.cpp
+    ../gecode_base/gecode_solver.cpp
+)
+
+target_include_directories(campaign_v1ld_v1cld_vs_ref PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(campaign_v1ld_v1cld_vs_ref PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(campaign_v1ld_v1cld_vs_ref PRIVATE -O3 -march=native)
+
+# ── Exécutable debug_v1cld_parallel_check (test de non-régression -- compare
+#    solve_v1cld séquentiel vs solve_v1cld_parallel, campagne V1LD/V1CLD
+#    trillium, cf. solver_generic/v1cld_solver_parallel.hpp) ──────────────────
+add_executable(debug_v1cld_parallel_check
+    ssp/debug_v1cld_parallel_check.cpp
+    ssp/gecode_bab_ssp.cpp
+    ../gecode_base/gecode_solver.cpp
+)
+
+target_include_directories(debug_v1cld_parallel_check PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
+    ${SOLVER_GENERIC_ROOT}
+    ${SOLVER_GENERIC_ROOT}/ssp
+    ${GECODE_PREFIX}/include
+)
+
+target_link_libraries(debug_v1cld_parallel_check PRIVATE
+    v1ld_generic_core
+    ortools::ortools
+    OpenMP::OpenMP_CXX
+    -L${GECODE_PREFIX}/lib
+    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
+)
+
+target_compile_options(debug_v1cld_parallel_check PRIVATE -O3 -march=native)
+
 # ── Variante debug_root_bound_v1ld (test de controle, 2026-08-12 -- v1LD n'a
 #    pas d'approximation dans Delta_i, sert a isoler si l'invalidite observee
 #    sur v1CLD est bien specifique a sa formule d'agregation) ────────────────

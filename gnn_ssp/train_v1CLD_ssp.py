@@ -553,11 +553,13 @@ class GNN(nn.Module):
       conv1      : GatedGraphConv(hidden, 2 it.) + LayerNorm
       conv2      : GatedGraphConv(hidden, 2 it.) + LayerNorm + skip(h1)
       proj       : hidden → 4h → ReLU → 2h                    → h_v
-      pool item  : nœud → item k [mean] (+ [max] si use_max_pool) → h_item_k
-      pool scén  : nœud → scénario i [mean] (+ [max] si use_max_pool) → h_scen_i
-      pool graph : scénario → graphe [mean] → g_pool (2h)
-      norm_ctx   : LayerNorm sur les 9 features de contexte (calculé une seule fois)
-      head       : [h_v | h_item_k | h_scen_i | g_pool | ctx] → h → ReLU → h → ReLU → 4
+      pool item     : nœud → item k        [mean] (+[max] si use_max_pool) → h_item_k
+      pool scénario : nœud → scénario i    [mean] (+[max] si use_max_pool) → h_scen_i
+      pool période  : nœud → période j     [mean] (+[max] si use_max_pool) → h_period_j
+      pool graph    : nœud → graphe        [mean] → g_pool (2h)
+      norm_ctx      : LayerNorm sur les 9 features de contexte (calculé une seule fois)
+      head          : [h_v | h_item_k | h_scen_i | h_period_j | g_pool | ctx]
+                      → h → ReLU → h → ReLU → 4
 
     `h_item_k` (ajouté 2026-07-07, `diag_scenario_variance.py`) = moyenne
     (+max) de `h_v` sur les N_z scénarios, à item k fixé — taille n_g,
@@ -578,9 +580,18 @@ class GNN(nn.Module):
     de h_scen_i avait dégradé la borne, donc prudence : on ne retire plus
     rien, on ajoute seulement.
 
+    `h_scen_i` / `h_period_j` (2026-08-17, remplace l'ancien pooling "par
+    groupe (i,j) flatten" qui n'était ni un vrai marginal scénario ni période
+    -- mirror exact de h_item/h_scen/h_cons de gnn_sd_edit/
+    train_v1CLD_sd_edit.py (MKP), "période" jouant le rôle de "contrainte".
+    Validé par A/B test à 300 graphes/100 epochs (discussion 2026-08-17) :
+    gain net et cohérent sur 5/6 combos (gap global -8.72%→-8.02%,
+    pct_vs_sg 59.0%→62.3%) -- adopté comme architecture standard, plus de
+    branche alternative dans le code.
+
     Paramètres :
       hidden              : dimension des couches cachées (défaut 64)
-      use_max_pool (bool) : si True, pool item/scén = [mean | max]
+      use_max_pool (bool) : si True, pool item/scén/période = [mean | max]
     """
     CONTEXT_DIM = 9  # [depth, frac_fixed, tightest, curr_cost, epsilon, n_fixed_z1/N, log(n_g), log(n_groups), n_groups/n_g]
     NODE_DIM    = 8  # [salary/s_max, demand/d_max, y_committed/E, shortfall/E, e/E, t/T, j/T, same_period]
@@ -606,12 +617,15 @@ class GNN(nn.Module):
             nn.Linear(4 * hidden, 2 * hidden),
         )
         self.norm_ctx = nn.LayerNorm(self.CONTEXT_DIM)
-        # pool item / scén : 2h chacun (mean seul) ou 4h (mean+max)
-        item_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
-        scen_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
+        # pool item / scén / période : 2h chacun (mean seul) ou 4h (mean+max)
+        item_pool_dim   = 4 * hidden if use_max_pool else 2 * hidden
+        scen_pool_dim   = 4 * hidden if use_max_pool else 2 * hidden
+        period_pool_dim = 4 * hidden if use_max_pool else 2 * hidden
 
-        # h_v(2h) + h_item_k(item_pool_dim) + h_scen_i(scen_pool_dim) + g_pool(2h) + ctx(9)
-        head_in = 2 * hidden + item_pool_dim + scen_pool_dim + 2 * hidden + self.CONTEXT_DIM
+        # h_v(2h) + h_item_k(item_pool_dim) + h_scen_i(scen_pool_dim)
+        # + h_period_j(period_pool_dim) + g_pool(2h) + ctx(9)
+        head_in = (2 * hidden + item_pool_dim + scen_pool_dim + period_pool_dim
+                   + 2 * hidden + self.CONTEXT_DIM)
         self.head = nn.Sequential(
             nn.Linear(head_in, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden),  nn.ReLU(),
@@ -640,13 +654,19 @@ class GNN(nn.Module):
         h2  = self.norm2(self.conv2(h1, ei, ew)) + h1
         h_v = self.proj(h2)                                        # (V, 2h)
 
-        # ── Pooling item-consensus (x̄_k) et scénario (h_scen_i) ───────────────
-        # Nœuds ordonnés i_idx*n_g + k_idx ; n_g consécutifs = un scénario, donc
-        # k_idx = local_idx % n_g identifie l'item indépendamment du scénario,
-        # et i_idx = local_idx // n_g identifie le scénario indépendamment de
-        # l'item. NB : suppose n_g uniforme sur le batch (hypothèse déjà faite
-        # par l'ancien pooling scénario — pas une nouvelle limitation).
+        # ── Pooling item (h_item_k), scénario pur (h_scen_i), période pure
+        # (h_period_j) ────────────────────────────────────────────────────────
+        # Nœuds ordonnés i*(T*n_g) + j*n_g + k (scénario majeur, puis période,
+        # puis item), donc à local_idx dans son graphe :
+        #   k   = local_idx % n_g
+        #   grp = local_idx // n_g  =  i*T + j
+        #   j   = grp % T   (période, marginalise i et k)
+        #   i   = grp // T  (scénario, marginalise j et k)
+        # NB : suppose n_g ET T uniformes sur le batch (n_g varie par nœud B&B
+        # mais est supposé constant au sein d'UN batch, même hypothèse que
+        # V1LD ; T est fixe par instance donc toujours uniforme en pratique).
         n_g = data.n_g if isinstance(data.n_g, int) else int(data.n_g.item())
+        T   = data.T   if isinstance(data.T,   int) else int(data.T.item())
 
         counts   = torch.bincount(batch, minlength=n_graphs)
         node_off = torch.zeros(n_graphs, dtype=torch.long, device=dev)
@@ -664,10 +684,12 @@ class GNN(nn.Module):
             h_item = h_item_mean                                    # (Σ n_g, 2h)
         h_item_exp = h_item[item_batch]                            # (V, 2h or 4h)
 
-        n_scen_per = counts // n_g
+        grp = local_idx // n_g                                      # i*T + j, 0..N_z*T-1
+
+        n_scen_per = counts // (n_g * T)                            # (B,) = N_z
         scen_off   = torch.zeros(n_graphs, dtype=torch.long, device=dev)
         scen_off[1:] = n_scen_per[:-1].cumsum(0)
-        scen_batch = scen_off[batch] + local_idx // n_g            # (V,)
+        scen_batch = scen_off[batch] + (grp // T)                   # (V,) i pur
 
         h_scen_mean = global_mean_pool(h_v, scen_batch)              # (Σ N_z, 2h)
         if self.use_max_pool:
@@ -677,21 +699,41 @@ class GNN(nn.Module):
             h_scen = h_scen_mean                                   # (Σ N_z, 2h)
         h_scen_exp = h_scen[scen_batch]                            # (V, 2h or 4h)
 
+        period_off   = torch.arange(n_graphs, device=dev) * T
+        period_batch = period_off[batch] + (grp % T)                # (V,) j pur
+
+        h_period_mean = global_mean_pool(h_v, period_batch)           # (Σ T, 2h)
+        if self.use_max_pool:
+            h_period_max = global_max_pool(h_v, period_batch)
+            h_period = torch.cat([h_period_mean, h_period_max], dim=-1)
+        else:
+            h_period = h_period_mean
+        h_period_exp = h_period[period_batch]                      # (V, 2h or 4h)
+
         ctx_exp = ctx_norm[batch]                                          # (V, 9)
 
         g_pool  = global_mean_pool(h_v, batch)                        # (B, 2h)
         g_exp   = g_pool[batch]                                            # (V, 2h)
 
-        cat     = torch.cat([h_v, h_item_exp, h_scen_exp, g_exp, ctx_exp], dim=-1)
+        cat     = torch.cat(
+            [h_v, h_item_exp, h_scen_exp, h_period_exp, g_exp, ctx_exp], dim=-1)
         h_out   = self.head(cat)                                   # (V, 4) — un λ par symbole σ
 
-        lam = h_out * data.c_scale / float(data.N)                  # broadcast (V,4) * scalaire
+        # FIX (2026-08-17) : héritage V1LD, ne divisait que par N. La correction
+        # V1CLD (Λ_sum_i/p_i, p_i=1/N ; lam/p_ij, p_ij=p_i/T) fait s'annuler le N
+        # mais laisse un facteur T non compensé dans la perturbation de coût
+        # effective (cf. review du pipeline, 2026-08-16-17) -- confirmé
+        # empiriquement (diag_overfit_single_v1cld_ssp.py --t_compensate,
+        # job 19155118 vs baseline T=12 : gnorm max ep1 40.3 -> 1.6, ÷25).
+        lam = h_out * data.c_scale / (float(data.N) * float(data.T))  # broadcast (V,4) * scalaire
         if return_hidden:
             # Diagnostic uniquement (bottleneck de pooling) : h_v (par nœud),
-            # h_item_mean (par item), h_scen_mean (par scénario), avant concat max.
+            # h_item_mean (par item), h_scen_mean (par scénario), h_period_mean
+            # (par période), avant concat max.
             extra = {"x": x, "h_embed": h, "h1": h1, "h2": h2,
                      "h_v": h_v, "h_item_mean": h_item_mean, "item_batch": item_batch,
                      "h_scen_mean": h_scen_mean, "scen_batch": scen_batch,
+                     "h_period_mean": h_period_mean, "period_batch": period_batch,
                      "g_pool": g_pool, "h_out": h_out}
             return lam, extra
         return lam
@@ -712,17 +754,27 @@ def _base_cost_full(salary_full: torch.Tensor, E: int, T: int, dev) -> torch.Ten
 
 def lagrangian_v1cld_ssp(lam: torch.Tensor, data: pyg_data.Data, inst: dict) -> torch.Tensor:
     """
-    Calcule L1(λ) V1CLD, différentiable en λ — port fidèle de la formule de
-    solver_generic/v1cld_solver.cpp (la seule source faisant foi, cf. docstring
-    du module) :
+    Calcule L1(λ) V1CLD, différentiable en λ — port fidèle de la formule
+    CORRIGÉE (2026-08-13) de solver_generic/v1cld_solver.cpp (la seule source
+    faisant foi, cf. docstring du module) :
 
-      Λ_sum       = Σ_{i,j} λ_{i,j}                       (sur TOUTES les paires (i,j) libres)
-      cost_{i,j}  = c + λ_{i,j}/p_{i,j} − Λ_sum,  p_{i,j} = p_i/T
+      Λ_sum_i     = Σ_j λ_{i,j}                           (PAR SCÉNARIO — pas sur tous les (i,j) ensemble)
+      cost_{i,j}  = c + λ_{i,j}/p_{i,j} − Λ_sum_i/p_i,  p_{i,j} = p_i/T
       θ_{i,j}     = solve_theta(j, cost_{i,j})            (DP libre, différentiable via argmax figé)
       ζ_{i,j}     = solve_zeta(i, j, cost_{i,j})           (glouton, détaché)
-      Δ_i         = (1/T) Σ_j max(0, θ_{i,j} − ζ_{i,j})   (agrégation — validité non démontrée, cf. docstring)
+      Δ_i         = (1/T) Σ_j max(0, θ_{i,j} − ζ_{i,j})   (le clamp est un no-op prouvé : ζ_{i,j}≤θ_{i,j} toujours, cf. preuve)
       y*, val     = glouton sur Δ (mêmes required_prob/n_fixed_z1 que V1LD)
       L1          = Σ_{i,j} p_{i,j} θ_{i,j} − Σ_i p_i y*_i Δ_i(λ)
+
+    Validité démontrée pour tout λ (centrage par scénario, condition
+    nécessaire et suffisante ici) : cf. PREUVE_v1CLD_centrage_par_scenario.md
+    (racine du dépôt) — preuve + vérification empirique sur 8 instances SSP
+    (recherche B&B complète comparée à la référence exacte, dont l'instance
+    de ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound qui
+    a motivé toute l'investigation). Le fix miroir côté C++ est déjà en
+    production (solver_generic/v1cld_solver.cpp). Ce fichier Python N'ÉTAIT
+    PAS encore corrigé avant ce commit — l'entraînement effectué avec
+    l'ancienne formule (checkpoints existants) reste à ré-évaluer/réentraîner.
 
     inst : dict instance, nécessaire pour reconstruire SSPCLDProblemBnB (cf.
            get_ssp_cld_problem — mêmes raisons qu'en V1LD, objet ctypes non
@@ -746,11 +798,17 @@ def lagrangian_v1cld_ssp(lam: torch.Tensor, data: pyg_data.Data, inst: dict) -> 
 
     c_full = _base_cost_full(data.salary_full, E, T, dev)         # (n_vars,)
 
-    # (A) Λ_sum = Σ_{i,j} λ_{i,j}  — sur les DEUX axes (scénario ET période)
-    Lambda_sum = lam_4d.sum(dim=(0, 1))                           # (G, 4)
+    # (A) Λ_sum_i = Σ_j λ_{i,j}  — PAR SCÉNARIO (axe période seulement)
+    # FIX (2026-08-13) : centrage global (sur les deux axes) remplacé par un
+    # centrage par scénario -- cf. preuve PREUVE_v1CLD_centrage_par_scenario.md
+    # et le fix miroir dans solver_generic/v1cld_solver.cpp. Le centrage
+    # global n'annule le terme libre en X̄ que globalement, pas scénario par
+    # scénario -- condition dont la dualité faible a besoin pour garantir
+    # theta_i(0) <= mean_j theta_ij(λ) (et l'analogue pour zeta_i).
+    Lambda_sum_i = lam_4d.sum(dim=1)                              # (N_z, G, 4)
 
-    # (B) cost_{i,j} = c + λ_{i,j}/p_{i,j} − Λ_sum, appliqué aux positions libres
-    lam_correction = lam_4d / p_ij - Lambda_sum.view(1, 1, G, SSP_SIGMA_SIZE)  # (N_z,T,G,4)
+    # (B) cost_{i,j} = c + λ_{i,j}/p_{i,j} − Λ_sum_i/p_i, appliqué aux positions libres
+    lam_correction = lam_4d / p_ij - (Lambda_sum_i / p_i).unsqueeze(1)  # (N_z,T,G,4)
     flat_free_idx = (
         free_et[:, None] * SSP_SIGMA_SIZE
         + torch.arange(SSP_SIGMA_SIZE, device=dev)[None, :]
@@ -868,8 +926,13 @@ def verify_v1cld_ssp(
     n_iters    = T
 
     for t in range(T):
-        Lsum           = lam.sum(axis=(0, 1))                          # (G,4)
-        lam_correction = lam / p_ij - Lsum[None, None, :, :]           # (N_z,T_hor,G,4)
+        # FIX (2026-08-13) : centrage PAR SCÉNARIO (axe période seulement),
+        # miroir du fix dans lagrangian_v1cld_ssp et solver_generic/v1cld_solver.cpp
+        # -- cf. PREUVE_v1CLD_centrage_par_scenario.md. L'ancien centrage
+        # global (axis=(0,1)) est la cause des "bornes dégénérées" mentionnées
+        # ci-dessus, pas seulement le facteur d'amplification N·T.
+        Lsum_i         = lam.sum(axis=1)                                # (N_z, G, 4)
+        lam_correction = lam / p_ij - (Lsum_i / p_i)[:, None, :, :]     # (N_z,T_hor,G,4)
 
         cost_full = np.broadcast_to(c_full_np, (n_groups, c_full_np.shape[0])).copy()
         cost_full[:, flat_free_idx] += lam_correction.reshape(n_groups, -1)

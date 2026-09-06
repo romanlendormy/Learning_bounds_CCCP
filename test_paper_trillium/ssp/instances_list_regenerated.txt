@@ -1,0 +1,12 @@
+test_paper_trillium/ssp/E6_T10_N500/rep6
+test_paper_trillium/ssp/E6_T12_N500/rep1
+test_paper_trillium/ssp/E6_T12_N500/rep2
+test_paper_trillium/ssp/E6_T12_N500/rep6
+test_paper_trillium/ssp/E8_T10_N500/rep0
+test_paper_trillium/ssp/E8_T10_N500/rep2
+test_paper_trillium/ssp/E8_T12_N100/rep4
+test_paper_trillium/ssp/E8_T12_N100/rep5
+test_paper_trillium/ssp/E8_T12_N100/rep6
+test_paper_trillium/ssp/E8_T12_N500/rep4
+test_paper_trillium/ssp/E8_T12_N500/rep6
+test_paper_trillium/ssp/E8_T12_N50/rep6
