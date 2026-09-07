@@ -59,6 +59,8 @@ logs/
 
 results/
 
+scratch/tmp_smoketest/
+
 external/
 
 .vscode/

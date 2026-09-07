@@ -333,7 +333,7 @@ double lagrangian_v1ld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double
 }
 
 // ── Export TorchScript one-shot (fork python, mis en cache) ─────────────────
-// Identique à gnn_v1ld_native.cpp : gnn/gnn_v1ld_scriptable.py est
+// Identique à gnn_v1ld_native.cpp : gnn_sd_edit/gnn_v1ld_scriptable.py est
 // topologie-agnostique (tenseurs bruts X/edge_index/edge_weight/context),
 // donc réutilisable tel quel pour un checkpoint entraîné sur sd_edit — pas
 // de script d'export séparé nécessaire.
@@ -345,7 +345,7 @@ std::string ensure_scripted_export(const std::string& checkpoint_path, const std
     if (file_exists(scripted_path) && file_mtime(scripted_path) >= file_mtime(checkpoint_path))
         return scripted_path;
 
-    std::string script = "gnn/gnn_v1ld_scriptable.py";
+    std::string script = "gnn_sd_edit/gnn_v1ld_scriptable.py";
 
     std::vector<char*> argv = {
         const_cast<char*>(python_exe.c_str()), const_cast<char*>(script.c_str()),

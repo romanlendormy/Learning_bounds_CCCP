@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gnn.gnn_v1ld_scriptable import GatedGraphConvScriptable
+from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable
 from gnn_ssp.gnn_ssp_scriptable_batched import GatedGraphConvSspClique
 
 

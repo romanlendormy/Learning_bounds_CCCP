@@ -4,7 +4,7 @@
  *
  * Alternative à GNNV1LDClient (gnn_v1ld_client.hpp), inspirée de
  * solver_swann_darius.cpp : le modèle est chargé UNE FOIS via
- * torch::jit::load() (TorchScript exporté par gnn/gnn_v1ld_scriptable.py,
+ * torch::jit::load() (TorchScript exporté par gnn_sd_edit/gnn_v1ld_scriptable.py,
  * qui réimplémente gnn.train_gnn_v1ld.GNN en torch pur — sans
  * torch_geometric, pas scriptable, cf. commentaires du .cpp) et appelé
  * directement via .forward() — PAS de réimplémentation manuelle de

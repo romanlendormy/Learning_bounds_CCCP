@@ -50,7 +50,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402
+from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402
 from gnn_sd_edit.gnn_sd_edit_scriptable_batched import GatedGraphConvDecomposed  # noqa: E402
 
 

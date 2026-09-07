@@ -6,7 +6,7 @@ inférence C++ via torch::jit::load() — mirror structurel de
 gnn_sd_edit/gnn_sd_edit_scriptable_batched.py (MKP), adapté à SSP.
 
 Pourquoi une réimplémentation et pas juste torch.jit.script(model) directement :
-même raison que côté MKP (cf. gnn.gnn_v1ld_scriptable) — torch_geometric.data.Data
+même raison que côté MKP (cf. gnn_sd_edit.gnn_v1ld_scriptable) — torch_geometric.data.Data
 et GatedGraphConv/MessagePassing héritent de signatures à arguments variables
 que TorchScript ne compile pas.
 
@@ -26,7 +26,7 @@ Pourquoi bloc-diagonal (edge_index/edge_weight dupliqués B fois avec offset
 par graphe), pas une dimension batch native sur les arêtes : dans un batch
 construit pendant UN run de B&B, tous les graphes partagent n_g, N_z ET T
 (mêmes raisons que MKP — topologie ET poids d'arêtes identiques pour tous
-les membres du batch). GatedGraphConvScriptable (gnn.gnn_v1ld_scriptable,
+les membres du batch). GatedGraphConvScriptable (gnn_sd_edit.gnn_v1ld_scriptable,
 réutilisée sans modification) traite le batch comme un seul grand graphe à
 composantes déconnectées — mathématiquement identique à B appels séparés.
 
@@ -69,7 +69,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402  (référence, gardée pour validation A/B)
+from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402  (référence, gardée pour validation A/B)
 
 
 class GatedGraphConvSspClique(nn.Module):

@@ -8,8 +8,8 @@
  * (activate_learning_and_grad) : ici la borne reste one-shot pure, comme
  * l'exige le reste du projet (cf. gnn_bound_backend.hpp / mode GNN existant).
  *
- * Le module TorchScript (gnn/gnn_v1ld_scriptable.py::GNNScriptable, exporté
- * une seule fois via gnn/gnn_v1ld_scriptable.py::export, mis en cache à côté
+ * Le module TorchScript (gnn_sd_edit/gnn_v1ld_scriptable.py::GNNScriptable, exporté
+ * une seule fois via gnn_sd_edit/gnn_v1ld_scriptable.py::export, mis en cache à côté
  * du checkpoint) réimplémente gnn.train_gnn_v1ld.GNN en torch pur — sans
  * torch_geometric, dont Data/MessagePassing ne sont pas scriptables
  * ("Compiled functions can't take variable number of arguments"). Le
@@ -320,7 +320,7 @@ double lagrangian_v1ld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double
 // ── Export TorchScript one-shot (fork python, mis en cache) ─────────────────
 // Le checkpoint complet (dict {"model":OrderedDict,"optimizer":...,"args":...})
 // n'est pas directement utilisable en C++ : c'est un objet Python générique.
-// gnn/gnn_v1ld_scriptable.py fait le pont — UNE SEULE FOIS par checkpoint
+// gnn_sd_edit/gnn_v1ld_scriptable.py fait le pont — UNE SEULE FOIS par checkpoint
 // (résultat mis en cache à côté du .pt), pas un process persistant.
 bool file_exists(const std::string& p) { struct stat st; return ::stat(p.c_str(), &st) == 0; }
 double file_mtime(const std::string& p) { struct stat st; if (::stat(p.c_str(), &st) != 0) return -1.0; return static_cast<double>(st.st_mtime); }
@@ -333,7 +333,7 @@ std::string ensure_scripted_export(const std::string& checkpoint_path, const std
     // Export toujours en CPU : torch::jit::load(path, device) remappe les
     // tenseurs vers le device voulu au chargement (pas besoin de CUDA
     // disponible côté Python au moment de l'export, ni de fichier par device).
-    std::string script = "gnn/gnn_v1ld_scriptable.py";
+    std::string script = "gnn_sd_edit/gnn_v1ld_scriptable.py";
 
     // posix_spawn (pas fork()+exec()) : ce process a déjà chargé LibTorch —
     // cf. gnn_v1ld_native.hpp pour le vrai bug rencontré en dev (pas un

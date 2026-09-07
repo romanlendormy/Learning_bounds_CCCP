@@ -42,7 +42,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn.gnn_v1ld_scriptable import GNNScriptable  # noqa: E402
+from gnn_sd_edit.gnn_v1ld_scriptable import GNNScriptable  # noqa: E402
 
 
 def build_sdedit_edges(n_g: int, N_z: int):
