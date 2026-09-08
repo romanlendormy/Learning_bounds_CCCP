@@ -59,6 +59,12 @@ logs/
 
 results/
 
+# Exception : campagne MKP racine V1LD vs REF sur Trillium (test_paper_trillium/),
+# résultats faisant foi pour le papier -- versionnés contrairement aux autres
+# dossiers results/ (recréables/intermédiaires).
+!/test_paper_trillium/results/
+!/test_paper_trillium/results/**
+
 scratch/tmp_smoketest/
 
 external/
