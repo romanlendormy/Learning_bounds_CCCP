@@ -501,35 +501,6 @@ target_link_libraries(bab_ssp_gecode_base_collect PRIVATE
 
 target_compile_options(bab_ssp_gecode_base_collect PRIVATE -O3 -march=native)
 
-# ── Exécutable test_gnn_v1cld_native (validation numérique standalone de
-#    l'intégration GNN→borne V1CLD SSP contre la référence Python, étape 2 du
-#    portage MKP→SSP, cf. ssp/gnn_v1cld_native.hpp) — pas de dépendance Gecode
-#    (SSPCLDProblemBnB/ssp_loader sont indépendants de Gecode, contrairement à
-#    SSPSpaceBnB ; le branchement dans le vrai B&B est test_gnn_v1cld_bab
-#    ci-dessous, étape 3) ──
-add_executable(test_gnn_v1cld_native
-    ssp/test_gnn_v1cld_native.cpp
-    ssp/gnn_v1cld_native.cpp
-)
-
-target_include_directories(test_gnn_v1cld_native PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${LIBTORCH_INCLUDE_DIRS}
-)
-target_compile_definitions(test_gnn_v1cld_native PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
-
-target_link_libraries(test_gnn_v1cld_native PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    ${LIBTORCH_LINK_FLAGS}
-)
-
-target_compile_options(test_gnn_v1cld_native PRIVATE -O3 -march=native)
-
 # ── Exécutable test_gnn_v1cld_bab (étape 3 : intégration bout-en-bout du GNN
 #    DANS le vrai B&B Gecode, SSPBoundMode::GNN, cf. ssp/gecode_bab_ssp.hpp) ─
 add_executable(test_gnn_v1cld_bab
@@ -556,69 +527,6 @@ target_link_libraries(test_gnn_v1cld_bab PRIVATE
     -L${GECODE_PREFIX}/lib
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
-
-# ── Exécutable test_gnn_v1cld_bab_batched_skeleton (étape B1 du batching
-#    multi-nœuds SSP, cf. ssp/gecode_bab_ssp_gnn_batched.hpp) : valide la DFS
-#    manuelle + bucketing (G,N_z) SEULE, backend stub sans borne (équivalent
-#    REF) -- aucune dépendance LibTorch, le GNN vient à l'étape B2 ──
-add_executable(test_gnn_v1cld_bab_batched_skeleton
-    ssp/test_gnn_v1cld_bab_batched_skeleton.cpp
-    ssp/gecode_bab_ssp_gnn_batched.cpp
-)
-
-target_include_directories(test_gnn_v1cld_bab_batched_skeleton PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(test_gnn_v1cld_bab_batched_skeleton PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(test_gnn_v1cld_bab_batched_skeleton PRIVATE -O3 -march=native)
-
-# ── Exécutable test_gnn_v1cld_ssp_native_batched (étape B2 du batching
-#    multi-nœuds SSP, cf. ssp/gnn_v1cld_native_batched.hpp) : valide
-#    query_batch() contre la référence Python ET contre le mode séquentiel
-#    (GNNV1CLDNative::query, déjà validé étape 2) -- suffixe _ssp pour éviter
-#    la collision de nom avec test_gnn_v1cld_native_batched (MKP, plus bas
-#    dans ce fichier) -- gecode_bab_ssp_gnn_batched.hpp (inclus pour
-#    SSPGNNBoundBackendBatch) tire les types Gecode de gecode_bab_ssp.hpp,
-#    donc les libs Gecode sont liées par précaution même si aucun Space n'est
-#    jamais instancié ici ──
-add_executable(test_gnn_v1cld_ssp_native_batched
-    ssp/test_gnn_v1cld_native_batched.cpp
-    ssp/gnn_v1cld_native.cpp
-    ssp/gnn_v1cld_native_batched.cpp
-)
-
-target_include_directories(test_gnn_v1cld_ssp_native_batched PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-    ${LIBTORCH_INCLUDE_DIRS}
-)
-target_compile_definitions(test_gnn_v1cld_ssp_native_batched PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
-
-target_link_libraries(test_gnn_v1cld_ssp_native_batched PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    ${LIBTORCH_LINK_FLAGS}
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(test_gnn_v1cld_ssp_native_batched PRIVATE -O3 -march=native)
 
 # ── Exécutable test_gnn_v1cld_bab_batched (étape B3 : intégration bout-en-bout
 #    du batching multi-nœuds SSP dans un vrai B&B, backend GNN réel -- cf.
