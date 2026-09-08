@@ -19,7 +19,7 @@ add_library(v1ld_generic_core STATIC IMPORTED)
 set_target_properties(v1ld_generic_core PROPERTIES
     IMPORTED_LOCATION "${SOLVER_GENERIC_BUILD}/libv1ld_generic_core.a"
     INTERFACE_INCLUDE_DIRECTORIES
-        "${SOLVER_GENERIC_ROOT};${SOLVER_GENERIC_ROOT}/mkp;${SOLVER_GENERIC_ROOT}/kp;${SOLVER_GENERIC_ROOT}/ssp;${SOLVER_GENERIC_ROOT}/covset"
+        "${SOLVER_GENERIC_ROOT};${SOLVER_GENERIC_ROOT}/mkp;${SOLVER_GENERIC_ROOT}/ssp"
 )
 
 # ── Gecode ────────────────────────────────────────────────────────────────────
@@ -137,7 +137,6 @@ target_include_directories(bab_mkp_gecode PRIVATE
     ${SOLVER_GENERIC_ROOT}
     ${SOLVER_GENERIC_ROOT}/mkp
     ${SOLVER_GENERIC_ROOT}/ssp
-    ${SOLVER_GENERIC_ROOT}/covset
     ${GECODE_PREFIX}/include
     ${LIBTORCH_INCLUDE_DIRS}
 )
@@ -177,7 +176,6 @@ target_include_directories(bab_mkp_gecode_v1cld_gnn_batched PRIVATE
     ${SOLVER_GENERIC_ROOT}
     ${SOLVER_GENERIC_ROOT}/mkp
     ${SOLVER_GENERIC_ROOT}/ssp
-    ${SOLVER_GENERIC_ROOT}/covset
     ${GECODE_PREFIX}/include
     ${LIBTORCH_INCLUDE_DIRS}
 )
@@ -210,7 +208,6 @@ target_include_directories(bab_mkp_gecode_base_collect PRIVATE
     ${SOLVER_GENERIC_ROOT}
     ${SOLVER_GENERIC_ROOT}/mkp
     ${SOLVER_GENERIC_ROOT}/ssp
-    ${SOLVER_GENERIC_ROOT}/covset
     ${GECODE_PREFIX}/include
     ${LIBTORCH_INCLUDE_DIRS}
 )

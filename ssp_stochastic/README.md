@@ -2,7 +2,7 @@
 
 Générateur de données pour le problème de **shift scheduling chance-constrained stochastique (SSP)**.
 Chaque épisode contient : un automate DFA de quarts légaux, des coûts salariaux, des scénarios
-de demande in-sample et out-of-sample, et optionnellement une solution de vérité-terrain (CP-SAT).
+de demande in-sample et out-of-sample.
 
 ---
 
@@ -10,25 +10,31 @@ de demande in-sample et out-of-sample, et optionnellement une solution de vérit
 
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install numpy ortools pyyaml pytest
+pip install numpy h5py pytest
 ```
 
 ---
 
 ## Utilisation rapide
 
-```bash
-# 10 épisodes avec la config par défaut
-python -m ssp_stochastic.generator --output dataset/
+Génération à `(E, T, N, ε)` fixés (pas de `tightness_target` universel — cf.
+`calibrate_adaptive.py` : le ratio Q_peak/E n'a pas d'effet stable selon T,
+validé empiriquement) :
 
-# Config personnalisée + graine reproductible
-python -m ssp_stochastic.generator --config ma_config.yaml --n 50 --seed 2024 --output dataset/
+```python
+from pathlib import Path
+from ssp_stochastic.generator_adaptive import generate_episode_fixed_E
 
-# Charger un épisode en Python
-from ssp_stochastic.loader import load_episode, build_bipartite_graph
-inst  = load_episode("dataset/episodes/ep_00000")
-graph = build_bipartite_graph(inst)
+ep = generate_episode_fixed_E(ep_id=0, E=15, T=12, N=50, epsilon=0.1,
+                               probe_bin=Path("solver_bab/build/ssp_probe"))
+# ep : dict compatible avec writers.write_episode / export_to_txt.write_instance
 ```
+
+Points d'entrée réels côté génération d'instances pour le B&B GNN batché :
+`gnn_ssp/gen_ssp_instance_custom.py` (via `generate_episode_fixed_E`) et
+`gnn_ssp/gen_ssp_instance_fixed_automaton.py` (réutilise un automate fixé
++ `calibrate_adaptive.calibrate_demand_scale`, cf.
+`gnn_ssp/NOTE_ssp_hard_instance_generation.md`).
 
 ---
 
@@ -72,24 +78,14 @@ Encodage alphabet dans `aut_trans` : O=0, P=1, R=2, W=3 (ordre alphabétique).
 
 ```python
 from ssp_stochastic.writers import open_dataset, read_episode, list_episodes
-from ssp_stochastic.loader  import load_episode, build_bipartite_graph
 
-# Lire un épisode brut
 with open_dataset("dataset/dataset.h5") as h5f:
     ids  = list_episodes(h5f)          # [0, 1, 2, ...]
     data = read_episode(h5f, ep_id=0)  # dict avec arrays + DFA
-
-# Charger comme Instance (objet structuré)
-with open_dataset("dataset/dataset.h5") as h5f:
-    inst = load_episode(h5f, ep_id=0)
-
-# Raccourci pour un épisode isolé
-from ssp_stochastic.loader import load_episode_from_file
-inst = load_episode_from_file("dataset/dataset.h5", ep_id=0)
-
-# Graphe bipartite pour GNN
-graph = build_bipartite_graph(inst)
 ```
+
+Conversion vers le format texte 4-fichiers attendu par `ssp_loader.cpp`
+(côté B&B Gecode) : `solver_generic/ssp/export_to_txt.py`.
 
 ---
 
@@ -188,11 +184,14 @@ min  ∑_e  ∑_t  s[t] · 𝟏[x[e,t] = W]
 | `demand.py` | Génération de la demande (AR(1) log-normal) |
 | `cost.py` | Génération des coûts salariaux |
 | `automaton.py` | Construction et minimisation du DFA |
-| `calibrate.py` | Calibration de E par quantile de demande |
-| `writers.py` | Lecture/écriture des fichiers texte |
-| `loader.py` | Chargement + graphe bipartite pour GNN |
-| `groundtruth.py` | Solveur CP-SAT (OR-Tools) |
-| `generator.py` | Générateur en lot (CLI) |
+| `calibrate_adaptive.py` | Calibration de l'échelle de demande par bissection (cible : fenêtre de nœuds B&B, cf. `gnn_ssp/NOTE_ssp_hard_instance_generation.md`) |
+| `writers.py` | Lecture/écriture du dataset HDF5 |
+| `generator_adaptive.py` | Génération d'un épisode à (E,T,N,ε) fixés |
+
+Modules retirés (2026-09, pipeline pré-adaptatif jamais reconstruit après la
+suppression de `ssp_stochastic` au commit `e2f7b37` — cf.
+`solver_generic/ssp/export_to_txt.py`) : `generator.py`, `calibrate.py`,
+`loader.py`, `groundtruth.py`, `config_default.yaml`.
 
 ---
 
@@ -217,5 +216,4 @@ Aucun état global n'est modifié (`numpy.random.seed` jamais appelé).
 
 ```bash
 pytest ssp_stochastic/tests/ -v
-# 47 passent, 1 skippé (micro-énumération : instance micro infaisable par construction)
 ```
