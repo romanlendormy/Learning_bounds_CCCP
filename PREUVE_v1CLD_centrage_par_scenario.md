@@ -2,8 +2,8 @@
 
 **Date** : 2026-08-13
 **Contexte** : investigation de l'invalidité observée de la borne v1CLD sur SSP (et,
-par formule partagée, sur MKP) — cf. `ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound/README.md`
-pour l'historique complet de juillet. Ce document reprend la construction depuis
+par formule partagée, sur MKP), déclenchée par une instance de debug (E=4,T=8,N=20)
+en juillet 2026 (historique détaillé supprimé depuis lors du dépôt). Ce document reprend la construction depuis
 zéro, avec une seule famille de multiplicateurs $\lambda_{i,j}$ indexée par
 (scénario $i$, contrainte $j$) — pas de couche $\mu$ séparée — pour rester
 compatible avec l'architecture GNN existante (un groupe de nœuds par
@@ -197,8 +197,13 @@ $m$ à la fin) — pas besoin de renormaliser $\lambda$.
 ## 7. Fichiers de référence
 
 - Preuve/dérivation initiale (couche scénario, Song et al.) : discussion du 2026-08-13.
-- Implémentation testée (diagnostic, ne touche pas au code de production) :
-  - `solver_bab/ssp/v1cld_solver_scentered.cpp` — centrage par scénario, une seule couche $\lambda_{i,j}$.
-  - `solver_bab/ssp/gecode_bab_ssp_scentered.hpp/.cpp` — B&B utilisant cette variante.
-  - `solver_bab/ssp/debug_replay_violation.cpp` — vérification directe des inégalités de dualité faible, par nœud capturé.
-- Historique de l'investigation de juillet : `ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound/README.md`.
+- Implémentation testée au moment de l'investigation (diagnostic local, jamais
+  commité, ne touchait pas au code de production) : `v1cld_solver_scentered.cpp`
+  + `gecode_bab_ssp_scentered.hpp/.cpp` (centrage par scénario, une seule couche
+  $\lambda_{i,j}$) — le correctif a été intégré directement dans
+  `solver_generic/v1cld_solver.cpp` le jour même (cf. commentaire `FIX (2026-08-13)`),
+  rendant ces fichiers diagnostiques obsolètes.
+- `solver_bab/ssp/debug_replay_violation.cpp` (toujours en production) : outil de
+  vérification directe des inégalités de dualité faible, par nœud capturé.
+- Historique de l'investigation de juillet (instance de debug E=4,T=8,N=20) :
+  supprimé lors du nettoyage du dépôt (2026-09).

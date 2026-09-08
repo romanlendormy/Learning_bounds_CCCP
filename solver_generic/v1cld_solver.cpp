@@ -106,8 +106,9 @@ V1CLDResult solve_v1cld(
     // dualite faible theta_i(0) <= mean_j theta_ij(lambda) (et l'analogue
     // pour zeta_i) exige Sum_j lambda[i][j] = 0 POUR CHAQUE i separement.
     // Sans ca, rien ne garantit theta_i(0)/zeta_i(0) <= la valeur agregee
-    // utilisee dans L1 -- c'est la cause racine de l'invalidite documentee
-    // dans ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound/README.md
+    // utilisee dans L1 -- c'est la cause racine de l'invalidite observee en
+    // juillet 2026 sur une instance de debug (E=4,T=8,N=20 ; historique
+    // supprime lors du nettoyage du depot, cf. commit sur ssp_stochastic/)
     // (le meme calcul, partage entre MKP et SSP via V1CLDProblem). Preuve
     // complete et verification empirique (10+ instances SSP, recherche B&B
     // complete comparee a la reference exacte) : cf.

@@ -26,9 +26,11 @@ beaucoup moins cher par appel que V1LD, mais il y a N_z*T appels par
 
 ⚠️ La formule d'agrégation Δ_i = (1/T)Σ_j δ_{i,j} (utilisée ici, fidèle à
 v1cld_solver.cpp:146-150) a une validité mathématique comme majorant de
-θ_i − ζ_i qui n'est PAS démontrée — piste ouverte documentée dans
-ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound/README.md.
-Les bornes produites ici sont donc exploratoires (utiles pour comparer
+θ_i − ζ_i qui n'est PAS démontrée ici — piste ouverte à l'origine de
+l'investigation de juillet 2026 (instance de debug E=4,T=8,N=20, historique
+supprimé lors du nettoyage du dépôt) ; cf. PREUVE_v1CLD_centrage_par_scenario.md
+(racine du dépôt) pour la preuve établie depuis pour la variante centrée par
+scénario. Les bornes produites ici sont donc exploratoires (utiles pour comparer
 GNN vs sous-gradient sur la MÊME loss), pas certifiées valides.
 
 Format des fichiers d'entrée : identique à train_v1LD_ssp.py (mêmes
@@ -770,11 +772,12 @@ def lagrangian_v1cld_ssp(lam: torch.Tensor, data: pyg_data.Data, inst: dict) -> 
     nécessaire et suffisante ici) : cf. PREUVE_v1CLD_centrage_par_scenario.md
     (racine du dépôt) — preuve + vérification empirique sur 8 instances SSP
     (recherche B&B complète comparée à la référence exacte, dont l'instance
-    de ssp_stochastic/debug_instances/E4_T8_N20_rep2_v1cld_invalid_bound qui
-    a motivé toute l'investigation). Le fix miroir côté C++ est déjà en
-    production (solver_generic/v1cld_solver.cpp). Ce fichier Python N'ÉTAIT
-    PAS encore corrigé avant ce commit — l'entraînement effectué avec
-    l'ancienne formule (checkpoints existants) reste à ré-évaluer/réentraîner.
+    de debug E=4,T=8,N=20 qui a motivé toute l'investigation en juillet 2026 ;
+    historique supprimé lors du nettoyage du dépôt). Le fix miroir côté C++
+    est déjà en production (solver_generic/v1cld_solver.cpp). Ce fichier
+    Python N'ÉTAIT PAS encore corrigé avant ce commit — l'entraînement
+    effectué avec l'ancienne formule (checkpoints existants) reste à
+    ré-évaluer/réentraîner.
 
     inst : dict instance, nécessaire pour reconstruire SSPCLDProblemBnB (cf.
            get_ssp_cld_problem — mêmes raisons qu'en V1LD, objet ctypes non
