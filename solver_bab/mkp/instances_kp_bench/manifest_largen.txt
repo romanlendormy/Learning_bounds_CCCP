@@ -1,8 +1,0 @@
-solver_bab/mkp/instances_kp_bench/kp_n50_N100_s1.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n50_N100_s2.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n75_N100_s1.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n75_N100_s2.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n100_N100_s1.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n100_N100_s2.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n150_N100_s1.txt,0
-solver_bab/mkp/instances_kp_bench/kp_n150_N100_s2.txt,0
