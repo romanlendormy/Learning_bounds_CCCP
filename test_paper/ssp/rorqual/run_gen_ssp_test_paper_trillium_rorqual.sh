@@ -1,10 +1,10 @@
 #!/bin/bash
 # run_gen_ssp_test_paper_trillium_rorqual.sh — Génère le jeu de test SSP pour
-# test_paper_trillium/ssp/ : grille E∈{4,6,8} × T∈{8,10,12} × N∈{50,100,500},
+# test_paper/ssp/rorqual/ssp/ : grille E∈{4,6,8} × T∈{8,10,12} × N∈{50,100,500},
 # 10 répétitions par combo (270 instances), calibrées par bissection sur le
 # nombre de nœuds B&B (ssp_probe / Gecode base).
 #
-# Calibration validée le 2026-08-22 (voir test_paper_trillium/ssp/README.md) :
+# Calibration validée le 2026-08-22 (voir test_paper/ssp/rorqual/README.md) :
 #   - epsilon = 0.1 pour toutes les instances
 #   - fenêtre cible [nœuds B&B] :
 #       E=4,T=10/12 -> [1e6,1e8] (E=4 sous [1e4,1e6] donne des instances
@@ -24,13 +24,13 @@
 # génère en série les répétitions manquantes de son combo.
 #
 # Soumettre (les 27 combos) :
-#   sbatch run_gen_ssp_test_paper_trillium_rorqual.sh
+#   sbatch test_paper/ssp/rorqual/run_gen_ssp_test_paper_trillium_rorqual.sh
 #
 # Smoke test (un seul combo, ex E=4,T=8,N=50 -> index 0) :
-#   sbatch --array=0 run_gen_ssp_test_paper_trillium_rorqual.sh
+#   sbatch --array=0 test_paper/ssp/rorqual/run_gen_ssp_test_paper_trillium_rorqual.sh
 #
 # Relancer seulement les combos qui ont échoué (ex E=4,T=8 -> indices 0,1,2) :
-#   sbatch --array=0,1,2 run_gen_ssp_test_paper_trillium_rorqual.sh
+#   sbatch --array=0,1,2 test_paper/ssp/rorqual/run_gen_ssp_test_paper_trillium_rorqual.sh
 
 # ── Ressources SLURM ──────────────────────────────────────────────────────────
 #SBATCH --account=def-qcappart
@@ -46,10 +46,10 @@
 set -uo pipefail   # pas de -e global : une répétition qui échoue ne doit pas tuer les autres
 
 # ── Chemins ───────────────────────────────────────────────────────────────────
-REPO="${SLURM_SUBMIT_DIR:-$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )}"
+REPO="${SLURM_SUBMIT_DIR:-$( cd "$( dirname "${BASH_SOURCE[0]}" )/../../.." && pwd )}"
 GEN_SCRIPT="$REPO/gnn_ssp/gen_ssp_instance_custom.py"
 PROBE_BIN="$REPO/solver_bab/build_collect_cpu/ssp_probe"
-OUT_ROOT="$REPO/test_paper_trillium/ssp"
+OUT_ROOT="$REPO/test_paper/ssp/rorqual/ssp"
 VENV_PATH="$HOME/envs/learning_bounds"
 
 EPSILON="0.1"

@@ -26,7 +26,7 @@ Aucune dépendance non-stdlib.
 Usage :
   python3 parse_gnn_vs_subgrad_ssp.py [logs_dir] [--csv PATH] [--detail-csv PATH]
                                        [--ref-csv PATH]
-    (logs_dir défaut : test_paper_trillium/logs)
+    (logs_dir défaut : test_paper/ssp/rorqual/gnn_vs_subgrad/logs)
     --csv PATH : ajoute (append) le résumé agrégé (une ligne par (E,T,N)),
     colonnes E,T,N,t_star_median,t_star_mean,n_resolved,n_total,
     gap_gnn_pct_mean,gap_subgrad_pct_mean.
@@ -34,7 +34,7 @@ Usage :
     E,T,N,rep,optimal,gnn_bound,gap_gnn_pct,subgrad_bound,gap_subgrad_pct,
     t_star,t_max,censored.
     --ref-csv PATH : fichier agrégé contenant les résultats REF déjà produits
-    par la campagne trillium_ssp_ref (défaut test_paper_trillium/results_ssp.csv,
+    par la campagne trillium_ssp_ref (défaut test_paper/ssp/rorqual/results_ssp.csv,
     colonnes E,T,N,rep,mode,status,objective,...) -- utilisé UNIQUEMENT si
     mode=="ref" et status=="OPTIMAL" pour la valeur optimale certifiée (pas
     d'incumbent non prouvé comme substitut, même garde-fou que côté MKP).
@@ -131,9 +131,10 @@ def main():
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
     csv_path = _opt_arg("csv")
     detail_csv_path = _opt_arg("detail-csv")
-    ref_csv = Path(_opt_arg("ref-csv", "test_paper_trillium/results_ssp.csv"))
+    script_dir = Path(__file__).resolve().parent
+    ref_csv = Path(_opt_arg("ref-csv", str(script_dir.parent / "results_ssp.csv")))
 
-    logs_dir = Path(positional[0] if positional else "test_paper_trillium/logs")
+    logs_dir = Path(positional[0] if positional else str(script_dir / "logs"))
     ref_optimals = load_ref_optimals(ref_csv)
 
     rows = []

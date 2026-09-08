@@ -108,13 +108,13 @@ run_task() {
     local TESTDIR GNN_MODE SUBGRAD_MODE CKPT
     local -a GNN_EXTRA_ARGS
     if [[ "$FORMULATION" == "v1ld" ]]; then
-        TESTDIR="$REPO/test_paper_trillium"
+        TESTDIR="$REPO/test_paper/mkp/trillium/v1ld"
         GNN_MODE="gnn_root"
         SUBGRAD_MODE="v1ld"
         CKPT="$REPO/gnn_sd_edit/runs/train_scaled/ckpt_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_500ep_ep0500.pt"
         GNN_EXTRA_ARGS=(cuda python3 native sd_edit)
     else
-        TESTDIR="$REPO/test_paper_trillium_v1cld"
+        TESTDIR="$REPO/test_paper/mkp/trillium/v1cld"
         GNN_MODE="gnn_root_v1cld"
         SUBGRAD_MODE="v1cld"
         CKPT="$REPO/gnn_sd_edit/runs_v1cld/ckpt_v1cld_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_v1cld_n10_20_500ep_ep0500.pt"

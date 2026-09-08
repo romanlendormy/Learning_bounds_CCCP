@@ -35,8 +35,9 @@ Usage :
     seed), colonnes n,formulation,N,seed,optimal,gnn_bound,gap_gnn_pct,
     subgrad_bound,gap_subgrad_pct,t_star,t_max,censored.
     --ref-dir DIR : répertoire contenant les résultats REF (défaut
-    test_paper/results, Rorqual — 111/120 instances, cf. mémoire
-    project_ccmkp_trillium_migration) utilisés comme source de la valeur
+    test_paper/mkp/trillium/v1ld/results, Trillium — 105/120 instances, cf.
+    commit "Verse les resultats MKP V1LD vs REF de la campagne Trillium")
+    utilisés comme source de la valeur
     optimale certifiée (ref_n<n>_N<N>_seed<seed>.csv, colonne "objective",
     UNIQUEMENT si status=="OPTIMAL" — sinon pas de gap calculable pour cette
     instance, rapporté comme tel plutôt que d'utiliser un incumbent non prouvé).
@@ -133,7 +134,8 @@ def main():
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
     csv_path = _opt_arg("csv")
     detail_csv_path = _opt_arg("detail-csv")
-    ref_dir = Path(_opt_arg("ref-dir", "test_paper/results"))
+    default_ref_dir = Path(__file__).resolve().parents[1] / "v1ld" / "results"
+    ref_dir = Path(_opt_arg("ref-dir", str(default_ref_dir)))
 
     scratch_dir = Path(positional[0] if len(positional) > 0 else "/scratch/romanlen/gnn_vs_subgrad_n15")
     n_items = int(positional[1]) if len(positional) > 1 else 15

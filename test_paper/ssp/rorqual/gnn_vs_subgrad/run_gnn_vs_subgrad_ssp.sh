@@ -1,11 +1,11 @@
 #!/bin/bash
 # run_gnn_vs_subgrad_ssp.sh — Portage CCMKP -> CCSSP de l'expérience "GNN
-# forward vs sous-gradient (t*)" (cf. test_paper_trillium/run_gnn_vs_subgrad_multi_n.sh,
+# forward vs sous-gradient (t*)" (cf. test_paper/mkp/trillium/gnn_vs_subgrad/run_gnn_vs_subgrad_multi_n.sh,
 # parse_gnn_vs_subgrad.py côté MKP, mécanisme GNN_ROOT/gnn_compare_bound porté
 # dans solver_bab/ssp/gecode_bab_ssp.hpp/.cpp + test_gnn_v1cld_bab.cpp).
 #
 # Portée demandée : V1CLD uniquement, (E,T) in {(4,8),(6,10),(8,12)},
-# N in {100,500}, rep 0..9 -- 60 instances (test_paper_trillium/ssp/).
+# N in {100,500}, rep 0..9 -- 60 instances (test_paper/ssp/rorqual/ssp/).
 #
 # Pour chaque instance :
 #   (a) calcule la borne GNN root-only (mode=gnn_root, device=cpu -- pas
@@ -58,8 +58,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=03:00:00
-#SBATCH --output=test_paper_trillium/logs/slurm_%x_%j.out
-#SBATCH --error=test_paper_trillium/logs/slurm_%x_%j.err
+#SBATCH --output=test_paper/ssp/rorqual/gnn_vs_subgrad/logs/slurm_%x_%j.out
+#SBATCH --error=test_paper/ssp/rorqual/gnn_vs_subgrad/logs/slurm_%x_%j.err
 
 set -uo pipefail   # PAS -e : on veut inspecter/continuer même si un appel time-out
 
@@ -71,7 +71,7 @@ source solver_bab/setup_gpu_env.sh
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
-LOGS_DIR="$REPO/test_paper_trillium/logs"
+LOGS_DIR="$REPO/test_paper/ssp/rorqual/gnn_vs_subgrad/logs"
 mkdir -p "$LOGS_DIR"
 
 BINARY="$REPO/solver_bab/build_ssp_gnnroot_sanity/test_gnn_v1cld_bab"
@@ -104,7 +104,7 @@ run_task() {
     local T_VAL=${ET_PAIR[1]}
 
     local TAG="E${E_VAL}_T${T_VAL}_N${N_SCEN}_rep${REP}"
-    local DATASET="$REPO/test_paper_trillium/ssp/E${E_VAL}_T${T_VAL}_N${N_SCEN}/rep${REP}"
+    local DATASET="$REPO/test_paper/ssp/rorqual/ssp/E${E_VAL}_T${T_VAL}_N${N_SCEN}/rep${REP}"
 
     if [[ ! -d "$DATASET" ]]; then
         echo "[ERREUR] task=$TASK1 instance introuvable : $DATASET" >&2
