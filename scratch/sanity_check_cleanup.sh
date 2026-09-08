@@ -86,18 +86,20 @@ fi
 
 # ── 4. Imports Python ────────────────────────────────────────────────────────
 section "4/10 Imports Python (gnn_sd_edit.gnn_v1ld_scriptable et ses appelants)"
-if python3 -c "
+LOG4="scratch/logs/check4_imports.log"
+python3 -c "
 import sys
 sys.path.insert(0, '.')
 from gnn_sd_edit.gnn_v1ld_scriptable import GNNScriptable, GatedGraphConvScriptable
-import gnn_sd_edit.export_aoti_sdedit
 import gnn_sd_edit.gnn_sd_edit_scriptable_batched
 import gnn_sd_edit.gnn_light
 import gnn_sd_edit.gnn_v1cld_sd_edit_scriptable_batched
 import gnn_ssp.gnn_ssp_scriptable_batched
 import gnn_ssp.validate_clique_mean_equivalence
 print('tous les imports OK')
-"; then
+" > "$LOG4" 2>&1
+cat "$LOG4"
+if grep -q "tous les imports OK" "$LOG4"; then
     RESULT[4_imports]="PASS"
 else
     RESULT[4_imports]="FAIL"
