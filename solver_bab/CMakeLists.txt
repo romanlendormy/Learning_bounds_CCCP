@@ -227,57 +227,6 @@ target_link_libraries(bab_mkp_gecode_base_collect PRIVATE
 
 target_compile_options(bab_mkp_gecode_base_collect PRIVATE -O3 -march=native)
 
-# ── Exécutable bench_ssp_bab (Gecode base vs B&B v1LD vs B&B v1CLD, SSP) ──────
-add_executable(bench_ssp_bab
-    ssp/bench_ssp_bab.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(bench_ssp_bab PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(bench_ssp_bab PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(bench_ssp_bab PRIVATE -O3 -march=native)
-
-# ── Exécutable bench_ssp_bab_file (idem, instance chargée depuis fichiers texte
-#    générés par ssp_stochastic — cf. solver_generic/ssp/export_to_txt.py) ────
-add_executable(bench_ssp_bab_file
-    ssp/bench_ssp_bab_file.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(bench_ssp_bab_file PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(bench_ssp_bab_file PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(bench_ssp_bab_file PRIVATE -O3 -march=native)
-
 # ── Exécutable bab_ssp_gecode_base_collect (CP pur + collecte GNN, SSP) ──────
 # Analogue SSP de bab_mkp_gecode_base_collect : réutilise SSPSpaceBnB/
 # SSPSharedData (ssp/gecode_bab_ssp.cpp) via une DFS manuelle avec
@@ -367,32 +316,6 @@ target_compile_options(test_gnn_v1cld_bab_batched PRIVATE -O3 -march=native)
 
 target_compile_options(test_gnn_v1cld_bab PRIVATE -O3 -march=native)
 
-# ── Exécutable debug_root_bound (diagnostic temporaire — validité de la borne
-#    v1CLD à la racine, cf. investigation du FAIL sanity check E=4,T=8,N=20) ──
-add_executable(debug_root_bound
-    ssp/debug_root_bound.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(debug_root_bound PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(debug_root_bound PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(debug_root_bound PRIVATE -O3 -march=native)
-
 # ── Exécutable campaign_v1ld_v1cld_vs_ref (campagne V1LD vs V1CLD sur
 #    test_paper_trillium/ssp/, avec B&B REF exact comme référence
 #    d'optimalité -- cf. solver_bab/ssp/campaign_v1ld_v1cld_vs_ref.cpp) ──────
@@ -447,79 +370,6 @@ target_link_libraries(debug_v1cld_parallel_check PRIVATE
 
 target_compile_options(debug_v1cld_parallel_check PRIVATE -O3 -march=native)
 
-# ── Variante debug_root_bound_v1ld (test de controle, 2026-08-12 -- v1LD n'a
-#    pas d'approximation dans Delta_i, sert a isoler si l'invalidite observee
-#    sur v1CLD est bien specifique a sa formule d'agregation) ────────────────
-add_executable(debug_root_bound_v1ld
-    ssp/debug_root_bound_v1ld.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(debug_root_bound_v1ld PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(debug_root_bound_v1ld PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    OpenMP::OpenMP_CXX
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(debug_root_bound_v1ld PRIVATE -O3 -march=native)
-
-# ── Exécutable debug_warmstart_rounds (diagnostic temporaire — compare v1LD
-#    et v1CLD sous le meme protocole de rafales courtes + warm-start) ─────────
-add_executable(debug_warmstart_rounds
-    ssp/debug_warmstart_rounds.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(debug_warmstart_rounds PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(debug_warmstart_rounds PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(debug_warmstart_rounds PRIVATE -O3 -march=native)
-
-# ── Exécutable debug_verify_oracle (diagnostic temporaire — verification force
-#    brute de l'exactitude de theta/zeta, independante de Gecode) ────────────
-add_executable(debug_verify_oracle
-    ssp/debug_verify_oracle.cpp
-    ${SOLVER_GENERIC_ROOT}/ssp/ssp_loader.cpp
-)
-
-target_include_directories(debug_verify_oracle PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-)
-
-target_link_libraries(debug_verify_oracle PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-)
-
-target_compile_options(debug_verify_oracle PRIVATE -O3 -march=native)
-
 # ── Exécutable debug_replay_violation (diagnostic temporaire — rejoue un
 #    (masque, lambda) capture au moment d'une violation reelle) ──────────────
 add_executable(debug_replay_violation
@@ -540,28 +390,6 @@ target_link_libraries(debug_replay_violation PRIVATE
 )
 
 target_compile_options(debug_replay_violation PRIVATE -O3 -march=native)
-
-# ── Variante debug_replay_violation_rounded (test hypothese scaling/troncature
-#    SCALE=1000, 2026-08-12 -- cf. salary_rounded EXPERIMENTAL dans
-#    gecode_bab_ssp.hpp) — temporaire, a retirer une fois l'hypothese tranchee.
-add_executable(debug_replay_violation_rounded
-    ssp/debug_replay_violation_rounded.cpp
-    ${SOLVER_GENERIC_ROOT}/ssp/ssp_loader.cpp
-)
-
-target_include_directories(debug_replay_violation_rounded PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-)
-
-target_link_libraries(debug_replay_violation_rounded PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-)
-
-target_compile_options(debug_replay_violation_rounded PRIVATE -O3 -march=native)
 
 # ── Exécutable ssp_probe (sonde rapide : Gecode base seul, pour balayages) ────
 add_executable(ssp_probe
@@ -585,52 +413,4 @@ target_link_libraries(ssp_probe PRIVATE
 )
 
 target_compile_options(ssp_probe PRIVATE -O3 -march=native)
-
-# ── Exécutable debug_capture_v1ld (diagnostic temporaire — lance UNIQUEMENT
-#    le B&B v1LD, pour capturer un dump SSP_DEBUG_DUMP specifique au mode LD
-#    sans que v1CLD ne le capture en premier, cf. bench_ssp_bab_file) ────────
-add_executable(debug_capture_v1ld
-    ssp/debug_capture_v1ld.cpp
-    ssp/gecode_bab_ssp.cpp
-    ../gecode_base/gecode_solver.cpp
-)
-
-target_include_directories(debug_capture_v1ld PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-    ${GECODE_PREFIX}/include
-)
-
-target_link_libraries(debug_capture_v1ld PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-    -L${GECODE_PREFIX}/lib
-    -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
-)
-
-target_compile_options(debug_capture_v1ld PRIVATE -O3 -march=native)
-
-# ── Exécutable debug_verify_v1ld_zeta (diagnostic temporaire — verifie
-#    zeta_i (v1LD, CP-SAT) contre une force brute JOINTE sur les E employes,
-#    teste specifiquement l'hypothese d'arrondi CPSAT_SCALE) ─────────────────
-add_executable(debug_verify_v1ld_zeta
-    ssp/debug_verify_v1ld_zeta.cpp
-    ${SOLVER_GENERIC_ROOT}/ssp/ssp_loader.cpp
-)
-
-target_include_directories(debug_verify_v1ld_zeta PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/ssp
-    ${SOLVER_GENERIC_ROOT}
-    ${SOLVER_GENERIC_ROOT}/ssp
-)
-
-target_link_libraries(debug_verify_v1ld_zeta PRIVATE
-    v1ld_generic_core
-    ortools::ortools
-)
-
-target_compile_options(debug_verify_v1ld_zeta PRIVATE -O3 -march=native)
 
