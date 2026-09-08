@@ -1,6 +1,6 @@
 #!/bin/bash
 # scratch/paper_campaign_ssp_v1ld_v1cld_vs_ref_full.sh — Job array : une
-# tâche par instance de test_paper_trillium/ssp/ (270 instances, cf.
+# tâche par instance de test_paper/ssp/rorqual/ssp/ (270 instances, cf.
 # instances_list.txt), chacune exécutant le binaire de production
 # solver_bab/ssp/campaign_v1ld_v1cld_vs_ref (REF + V1CLD + V1LD, cf.
 # campaign_v1ld_v1cld_vs_ref.cpp pour le détail et les décisions de
@@ -57,7 +57,7 @@ export LD_LIBRARY_PATH="$EXT/gecode/lib:$EXT/ortools/lib:${LD_LIBRARY_PATH:-}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 BIN="$REPO/solver_bab/build_collect_cpu/campaign_v1ld_v1cld_vs_ref"
-LIST="$REPO/test_paper_trillium/instances_list.txt"
+LIST="$REPO/test_paper/ssp/rorqual/instances_list.txt"
 
 [[ -x "$BIN" ]] || { echo "ERREUR : $BIN absent -- construire AVANT de soumettre (cf. en-tête du script)"; exit 1; }
 
@@ -65,10 +65,10 @@ LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$LIST")
 [[ -n "$LINE" ]] || { echo "ERREUR : pas de ligne $SLURM_ARRAY_TASK_ID dans $LIST"; exit 1; }
 
 # Format d'une ligne : "E T N rep chemin_relatif" (chemin relatif à
-# test_paper_trillium/, cf. test_paper_trillium/gen_instances_list_ssp.sh) --
+# test_paper/ssp/rorqual/, cf. test_paper/ssp/rorqual/gen_instances_list_ssp.sh) --
 # pas un chemin nu contrairement à instances_list_regenerated.txt.
 REL_PATH=$(awk '{print $5}' <<< "$LINE")
-INSTANCE_DIR="$REPO/test_paper_trillium/$REL_PATH"
+INSTANCE_DIR="$REPO/test_paper/ssp/rorqual/$REL_PATH"
 [[ -d "$INSTANCE_DIR" ]] || { echo "ERREUR : $INSTANCE_DIR introuvable"; exit 1; }
 
 echo "[array $SLURM_ARRAY_TASK_ID] instance=$LINE"

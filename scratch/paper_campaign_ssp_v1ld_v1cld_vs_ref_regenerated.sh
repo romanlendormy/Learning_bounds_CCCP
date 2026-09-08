@@ -2,14 +2,14 @@
 # scratch/paper_campaign_ssp_v1ld_v1cld_vs_ref_regenerated.sh — Variante de
 # paper_campaign_ssp_v1ld_v1cld_vs_ref_full.sh (job principal, 270 instances,
 # job 19434333) mais restreinte aux 12 instances REGÉNÉRÉES (cf.
-# test_paper_trillium/ssp/regenerate_infeasible.sh) après que REF n'ait
+# test_paper/ssp/rorqual/regenerate_infeasible.sh) après que REF n'ait
 # trouvé AUCUNE solution sur les originales (INFEASIBLE/TIMEOUT). Lance le
 # même binaire de production solver_bab/ssp/campaign_v1ld_v1cld_vs_ref
 # (REF + V1CLD + V1LD).
 #
 # Volontairement TENU À PART du job principal (décision utilisateur
 # 2026-08-22) : job/array/logs/résultats séparés, même si les 12 instances
-# occupent les MÊMES chemins (test_paper_trillium/ssp/E{E}_T{T}_N{N}/rep{r})
+# occupent les MÊMES chemins (test_paper/ssp/rorqual/ssp/E{E}_T{T}_N{N}/rep{r})
 # que dans le run principal -- seul leur CONTENU a changé (nouvel ep_id).
 # Ne pas fusionner automatiquement avec results/ssp_trillium_v1ld_v1cld_vs_ref_summary.csv
 # tant que l'utilisateur n'a pas validé les 12 nouveaux résultats.
@@ -44,7 +44,7 @@ export LD_LIBRARY_PATH="$EXT/gecode/lib:$EXT/ortools/lib:${LD_LIBRARY_PATH:-}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 BIN="$REPO/solver_bab/build_collect_cpu/campaign_v1ld_v1cld_vs_ref"
-LIST="$REPO/test_paper_trillium/ssp/instances_list_regenerated.txt"
+LIST="$REPO/test_paper/ssp/rorqual/instances_list_regenerated.txt"
 
 [[ -x "$BIN" ]] || { echo "ERREUR : $BIN absent -- construire AVANT de soumettre"; exit 1; }
 

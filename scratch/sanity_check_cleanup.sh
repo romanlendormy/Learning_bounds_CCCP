@@ -2,8 +2,8 @@
 # scratch/sanity_check_cleanup.sh — Vérifie que le nettoyage de septembre 2026
 # (suppression de gnn/, déplacement de gnn_v1ld_scriptable.py vers
 # gnn_sd_edit/, nettoyage collect/, solver_bab/, data/, sweep_bab/) n'a rien
-# cassé côté pipeline GNN-batché test_paper (MKP, V1LD et V1CLD) /
-# test_paper_trillium (SSP) ni côté lancement d'entraînement.
+# cassé côté pipeline GNN-batché test_paper/mkp/trillium (MKP, V1LD et V1CLD) /
+# test_paper/ssp/rorqual (SSP) ni côté lancement d'entraînement.
 #
 # 10 checks indépendants, chacun continue même si un précédent échoue (pas de
 # set -e) — le but est de voir TOUT ce qui casse en un seul run :
@@ -13,7 +13,7 @@
 #   4.  Imports Python des fichiers repointés vers gnn_sd_edit.gnn_v1ld_scriptable
 #   5.  B&B GNN-batché MKP V1LD minimal
 #   6.  B&B GNN-batché MKP V1CLD minimal (même instance que #5 — l'en-tête de
-#       test_paper_trillium_v1cld/run_v1cld_array.sh documente un sanity-check
+#       test_paper/mkp/trillium/v1cld/run_v1cld_array.sh documente un sanity-check
 #       antérieur donnant le MÊME optimum 3436.0230 que V1LD/ref sur cette
 #       instance — vérifié ici en plus du simple "ne plante pas")
 #   7.  B&B GNN-batché SSP minimal
@@ -148,7 +148,7 @@ if [[ "${RESULT[3_build_ssp]}" == "PASS" ]]; then
     CKPT_SSP="gnn_ssp/runs/train_scaled/ckpt_scaled_v1cld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
     LOG7="scratch/logs/check7_bb_ssp.log"
     timeout 150 solver_bab/build_gpu_ssp/test_gnn_v1cld_bab_batched \
-        test_paper_trillium/ssp/E4_T8_N50/rep0 "$CKPT_SSP" 0.0 60 8 cuda \
+        test_paper/ssp/rorqual/ssp/E4_T8_N50/rep0 "$CKPT_SSP" 0.0 60 8 cuda \
         > "$LOG7" 2>&1
     cat "$LOG7"
     if status_ok "$LOG7"; then RESULT[7_bb_ssp]="PASS"; else RESULT[7_bb_ssp]="FAIL"; fi
