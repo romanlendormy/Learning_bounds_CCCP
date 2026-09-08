@@ -57,14 +57,18 @@ export LD_LIBRARY_PATH="$EXT/gecode/lib:$EXT/ortools/lib:${LD_LIBRARY_PATH:-}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 BIN="$REPO/solver_bab/build_collect_cpu/campaign_v1ld_v1cld_vs_ref"
-LIST="$REPO/test_paper_trillium/ssp/instances_list.txt"
+LIST="$REPO/test_paper_trillium/instances_list.txt"
 
 [[ -x "$BIN" ]] || { echo "ERREUR : $BIN absent -- construire AVANT de soumettre (cf. en-tête du script)"; exit 1; }
 
 LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$LIST")
 [[ -n "$LINE" ]] || { echo "ERREUR : pas de ligne $SLURM_ARRAY_TASK_ID dans $LIST"; exit 1; }
 
-INSTANCE_DIR="$REPO/$LINE"
+# Format d'une ligne : "E T N rep chemin_relatif" (chemin relatif à
+# test_paper_trillium/, cf. test_paper_trillium/gen_instances_list_ssp.sh) --
+# pas un chemin nu contrairement à instances_list_regenerated.txt.
+REL_PATH=$(awk '{print $5}' <<< "$LINE")
+INSTANCE_DIR="$REPO/test_paper_trillium/$REL_PATH"
 [[ -d "$INSTANCE_DIR" ]] || { echo "ERREUR : $INSTANCE_DIR introuvable"; exit 1; }
 
 echo "[array $SLURM_ARRAY_TASK_ID] instance=$LINE"
