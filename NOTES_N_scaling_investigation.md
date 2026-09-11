@@ -1,4 +1,4 @@
-# Note : pourquoi le GNN V1LD dégrade fortement à grand N (scénarios), et pistes explorées
+# Note : pourquoi le GNN SLD dégrade fortement à grand N (scénarios), et pistes explorées
 
 Rédigé le 2026-07-03. Objectif : pouvoir reprendre cette investigation sans avoir
 à relire toute la conversation qui l'a produite.
@@ -7,7 +7,7 @@ Rédigé le 2026-07-03. Objectif : pouvoir reprendre cette investigation sans av
 
 `gnn/diag_overfit_100.py` entraîne un GNN à prédire, en **un seul forward pass**,
 les multiplicateurs de Lagrange λ_ik (un par paire scénario libre × item actif,
-donc N_z·n_g valeurs) pour une borne de relaxation lagrangienne (V1LD) utilisée
+donc N_z·n_g valeurs) pour une borne de relaxation lagrangienne (SLD) utilisée
 comme borne à chaque nœud d'un Branch & Bound (B&B).
 
 **Le GNN performe très bien à N=50 mais s'effondre à N=500** (n=10 fixe dans
@@ -79,7 +79,7 @@ N=50/N=500 — écarté comme cause principale.
 
 ### 2. Dilution du gradient par nœud (facteur 1/N via Λ_sum) — ÉCARTÉE
 
-**Idée** : `lam = h_out * c_scale / N` (ligne 735 de `train_gnn_v1ld.py`), et
+**Idée** : `lam = h_out * c_scale / N` (ligne 735 de `train_gnn_sld.py`), et
 `Λ_sum[k] = Σ_i λ_ik`, donc `∂Λ_sum[k]/∂h_out_i,k = c_scale/N` — la contribution
 de gradient de chaque nœud individuel à travers ce terme est mathématiquement
 atténuée en 1/N.
@@ -101,7 +101,7 @@ grandeur. Ne prive pas le réseau de signal d'apprentissage.
 N=50 qu'à N=500, `pct_better_T50` compare le GNN à des barres de dureté
 différentes selon N.
 
-**Test** : `verify_v1ld(g, T=50)` vs `verify_v1ld(g, T=1000)` sur 8 instances
+**Test** : `verify_sld(g, T=50)` vs `verify_sld(g, T=1000)` sur 8 instances
 profondeur 0 par groupe N, mesure du gap relatif (/c_scale) restant à combler.
 
 **Résultat** :
@@ -162,7 +162,7 @@ au mieux une petite fraction du gap. Pas la cause principale.
 `--lam_max` vaut 0.0 par défaut dans `diag_overfit_100.py`, et
 `run_ablation_N_rorqual.sh` ne le passe jamais explicitement → **tanh n'a été
 activé sur aucun run** (ablation_N, ni ablation_hidden) : sortie λ toujours
-linéaire non bornée. Vérifié dans le code (`train_gnn_v1ld.py:735`), pas une
+linéaire non bornée. Vérifié dans le code (`train_gnn_sld.py:735`), pas une
 piste de dégradation en soi.
 
 ## Synthèse : la conclusion qui recombine tout ça
@@ -182,7 +182,7 @@ changent cette nature fondamentalement one-shot du problème.
 
 ## Piste retenue (motivée par les maths, pas encore implémentée)
 
-Dans `verify_v1ld`/`lagrangian_v1ld`, la mise à jour du sous-gradient est
+Dans `verify_sld`/`lagrangian_sld`, la mise à jour du sous-gradient est
 `λ_ik += step·(x̄_k − x_ik)`, où `x̄_k` est un **consensus global par item**
 (taille n_g, indépendante de N) et `x_ik` la décision propre du scénario i. La
 structure de λ* est donc **factorisée** : une petite partie globale + une
@@ -204,16 +204,16 @@ implémentée ni testée** au moment de la rédaction.
 **But** : mesurer, à titre purement diagnostique (pas pour la production —
 la contrainte one-shot reste absolue), à quel point le λ appris par le GNN est
 déjà un bon point de départ, en le comparant à un raffinement post-hoc par
-sous-gradient (`verify_v1ld(g, T=K, lam_init=λ_GNN)` pour K=5/10/20/50 vs la
+sous-gradient (`verify_sld(g, T=K, lam_init=λ_GNN)` pour K=5/10/20/50 vs la
 référence froide T=50 et T=1000).
 
 - Code modifié : `gnn/diag_overfit_100.py` (nouveau flag `--save_checkpoint` :
   sauvegarde `checkpoint.pt` + `lambdas_final.pt`, ce dernier contenant le λ
   final **et** toutes les données du graphe — `A_g`, `b_res_g`, `c_g`,
   `c_scale`, `epsilon`, `n_fixed_z1`, `opt` — pour pouvoir ré-évaluer
-  `lagrangian_v1ld`/`verify_v1ld` hors-ligne sans dépendre des données
+  `lagrangian_sld`/`verify_sld` hors-ligne sans dépendre des données
   d'origine, souvent sur `SLURM_TMPDIR` donc éphémères après la fin du job).
-  `gnn/train_gnn_v1ld.py` : `GNN.forward()` accepte maintenant
+  `gnn/train_gnn_sld.py` : `GNN.forward()` accepte maintenant
   `return_hidden=True` (retourne aussi `h_v`, `h_scen_mean`, `g_pool`,
   `scen_batch`, `x`, `h_embed`, `h1`, `h2` — utilisé pour l'hypothèse 1/4).
   `run_ablation_N_rorqual.sh` : flag `SAVE_CHECKPOINT=1` câblé.
@@ -241,7 +241,7 @@ dur, root du B&B) :
 **Le λ brut du GNN est pire que 50 itérations à froid sur ce sous-ensemble, et
 démarrer le sous-gradient depuis ce point n'apporte AUCUNE amélioration avant
 ~10 itérations** (warm_T5 = raw_gnn exactement, sur les 15/15 instances — la
-valeur "best" trackée par `verify_v1ld` reste bloquée à l'itération 0 pendant
+valeur "best" trackée par `verify_sld` reste bloquée à l'itération 0 pendant
 les 5 premières itérations). Il faut revenir à ~50 itérations pour rejoindre
 grosso modo le niveau de la référence froide — aucun gain de temps du
 warm-start ici, y compris à titre diagnostique.
@@ -337,7 +337,7 @@ pour d'autres raisons (mémoire, scalabilité).
 ### 2. Test du pooling enrichi (mean+max+attn concaténés) — cohérent avec l'hypothèse 1 (pooling déjà écarté)
 
 Nouvelle option `use_rich_pool` ajoutée aux deux architectures (`GNN` dans
-`train_gnn_v1ld.py`, `GNNBipartite` dans `train_gnn_bipartite.py`) : `g_pool`
+`train_gnn_sld.py`, `GNNBipartite` dans `train_gnn_bipartite.py`) : `g_pool`
 passe de 2h (une seule stratégie, mean OU attention) à 6h (mean+max+attn
 concaténés). Testé à budget fixe (500 epochs), N=50 et N=500, les deux
 architectures :
@@ -384,7 +384,7 @@ question différente et **non testée** : un modèle partagé, entraîné avec u
 budget de gradient-steps réparti sur tout le dataset, généralise-t-il
 correctement à de nouvelles instances N=500 ? Rien dans cette conversation
 (ni dans les hypothèses précédentes) n'y répond. `train_full_bipartite.py` /
-`train_gnn_v1ld.py` (entraînement multi-instances avec split train/eval) sont
+`train_gnn_sld.py` (entraînement multi-instances avec split train/eval) sont
 les outils existants pour l'attaquer, mais pas encore utilisés dans ce sens
 pour la question N=500 spécifiquement.
 
@@ -394,7 +394,7 @@ pour la question N=500 spécifiquement.
   `gnn/diag_overfit_single.py`.
 - `run_overfit_single_rorqual.sh` / `run_overfit_single_bipartite_rorqual.sh`
   (nouveau) : ajout du support `RICH_POOL=1`.
-- `GNN.use_rich_pool` (`train_gnn_v1ld.py`) et `GNNBipartite.use_rich_pool`
+- `GNN.use_rich_pool` (`train_gnn_sld.py`) et `GNNBipartite.use_rich_pool`
   (`train_gnn_bipartite.py`) : option pooling enrichi, désactivée par défaut,
   rétrocompatible.
 - Les deux `diag_overfit_single.py` : `lam_diversity` (décomposition

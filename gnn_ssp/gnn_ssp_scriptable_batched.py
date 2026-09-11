@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-gnn_ssp_scriptable_batched.py — Réimplémentation de gnn_ssp.train_v1CLD_ssp.GNN
+gnn_ssp_scriptable_batched.py — Réimplémentation de gnn_ssp.train_DLD_ssp.GNN
 en torch pur (sans torch_geometric), scriptable via torch.jit.script, pour
 inférence C++ via torch::jit::load() — mirror structurel de
 gnn_sd_edit/gnn_sd_edit_scriptable_batched.py (MKP), adapté à SSP.
 
 Pourquoi une réimplémentation et pas juste torch.jit.script(model) directement :
-même raison que côté MKP (cf. gnn_sd_edit.gnn_v1ld_scriptable) — torch_geometric.data.Data
+même raison que côté MKP (cf. gnn_sd_edit.gnn_sld_scriptable) — torch_geometric.data.Data
 et GatedGraphConv/MessagePassing héritent de signatures à arguments variables
 que TorchScript ne compile pas.
 
@@ -14,7 +14,7 @@ Différence structurelle avec MKP (à ne pas perdre de vue, cf. discussion
 2026-08-18) : MKP n'a que DEUX vues de pooling (item, scénario) et un seul axe
 qui varie par nœud B&B (n_g). SSP en a TROIS (item, scénario, période) —
 l'axe "période" j∈[0,T) est un analogue direct de l'axe "contrainte" de MKP
-(cf. train_v1CLD_ssp.py::GNN, docstring "h_scen_i / h_period_j"), mais T ne
+(cf. train_DLD_ssp.py::GNN, docstring "h_scen_i / h_period_j"), mais T ne
 rétrécit JAMAIS avec la profondeur B&B (contrairement à n_g et N_z) — c'est
 une propriété fixe de l'instance. Conséquence pour le batching en amont
 (Étape 4 du plan) : la condition de validité du bloc-diagonal ci-dessous
@@ -26,16 +26,16 @@ Pourquoi bloc-diagonal (edge_index/edge_weight dupliqués B fois avec offset
 par graphe), pas une dimension batch native sur les arêtes : dans un batch
 construit pendant UN run de B&B, tous les graphes partagent n_g, N_z ET T
 (mêmes raisons que MKP — topologie ET poids d'arêtes identiques pour tous
-les membres du batch). GatedGraphConvScriptable (gnn_sd_edit.gnn_v1ld_scriptable,
+les membres du batch). GatedGraphConvScriptable (gnn_sd_edit.gnn_sld_scriptable,
 réutilisée sans modification) traite le batch comme un seul grand graphe à
 composantes déconnectées — mathématiquement identique à B appels séparés.
 
 Nœuds ordonnés i*(T*n_g) + j*n_g + k (scénario majeur, période, item — cf.
-train_v1CLD_ssp.py::build_graph et le docstring de GNN.forward()), donc pour
+train_DLD_ssp.py::build_graph et le docstring de GNN.forward()), donc pour
 un batch de B graphes empilés bout à bout : X a pour forme
 (B*N_z*T*n_g, node_dim), et l'indice v_total // B // T // n_g redonne N_z.
 
-Mêmes noms de paramètres que gnn_ssp.train_v1CLD_ssp.GNN → load_state_dict
+Mêmes noms de paramètres que gnn_ssp.train_DLD_ssp.GNN → load_state_dict
 (strict=True) fonctionne directement depuis un checkpoint de production
 existant.
 
@@ -53,7 +53,7 @@ forward(X, edge_index, edge_weight, context, n_g, T, B) :
   n_g, T, B    : int              — partagés par construction (bucketing par (n_g,N_z,T))
   retour       : lam (B*V, 4) brut — PAS mis à l'échelle par c_scale/(N*T) (fait
                  par l'appelant, comme GNNScriptable côté MKP : c_scale/N/T ne
-                 sont pas des poids du modèle, cf. train_v1CLD_ssp.py:722-728
+                 sont pas des poids du modèle, cf. train_DLD_ssp.py:722-728
                  pour la formule de mise à l'échelle exacte à reproduire côté
                  appelant).
 """
@@ -69,7 +69,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402  (référence, gardée pour validation A/B)
+from gnn_sd_edit.gnn_sld_scriptable import GatedGraphConvScriptable  # noqa: E402  (référence, gardée pour validation A/B)
 
 
 class GatedGraphConvSspClique(nn.Module):
@@ -127,7 +127,7 @@ class GatedGraphConvSspClique(nn.Module):
 
 class GNNSspScriptableBatched(nn.Module):
     """
-    Port batché de gnn_ssp.train_v1CLD_ssp.GNN (3 vues de pooling : item,
+    Port batché de gnn_ssp.train_DLD_ssp.GNN (3 vues de pooling : item,
     scénario pur, période pure — cf. docstring module). Architecturalement
     identique à l'original — seule la mécanique de pooling gagne une
     dimension B, et un axe (période) de plus que le pooling MKP.

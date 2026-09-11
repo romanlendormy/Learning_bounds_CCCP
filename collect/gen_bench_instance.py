@@ -4,7 +4,7 @@ que la collecte collect_s10, cf. collect_large_base_samples.generate_song_tempfi
 et imprime son chemin sur stdout.
 
 Sert de source d'instance pour les benchmarks compare_ref_gnn_gen.sh et
-compare_ref_v1ld_v1cld_gnn_gen.sh, qui utilisent une instance générée à la
+compare_ref_sld_dld_gnn_gen.sh, qui utilisent une instance générée à la
 volée plutôt qu'un fichier figé du jeu Song et al.
 
 Usage :

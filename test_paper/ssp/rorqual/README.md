@@ -2,7 +2,7 @@
 
 Instances générées pour évaluer sur Trillium : temps de résolution GNN vs
 référence (B&B), nombre de nœuds, gap relatif, comparaison forward pass GNN
-vs sous-gradient pur, et V1LD vs V1CLD.
+vs sous-gradient pur, et SLD vs DLD.
 
 Générées sur Rorqual (login/job SLURM), pas sur Trillium — poussées ensuite
 via git pour être récupérées côté Trillium.

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * ssp_problem.hpp — V1LDProblem pour le SSP shift scheduling multi-employés.
+ * ssp_problem.hpp — SLDProblem pour le SSP shift scheduling multi-employés.
  *
  * Problème : E employés partagent un DFA unique de quarts légaux.
  * Scénarios : demande d[t,i] (entier ≥ 0) requise à la période t pour le scénario i.
@@ -24,10 +24,10 @@
  * solve_zeta(i, cost) :
  *   Domaine du scénario i = base ∩ { Σ_e x[e,t,W] ≥ d[t,i] ∀t }.
  *   Exact via OR-Tools CP-SAT (AddAutomaton × E + couverture). NP-hard exact.
- *   Validité de la borne v1LD exige l'optimalité exacte.
+ *   Validité de la borne SLD exige l'optimalité exacte.
  */
 
-#include "v1ld_base.hpp"
+#include "sld_base.hpp"
 #include <tuple>
 #include <vector>
 
@@ -35,7 +35,7 @@
 static constexpr int SSP_SIGMA_SIZE = 4;
 static constexpr int SSP_SIGMA_W    = 3;  // indice de W (work)
 
-class SSPShiftProblem : public V1LDProblem {
+class SSPShiftProblem : public SLDProblem {
 public:
     /*
      * Constructeur.
@@ -62,7 +62,7 @@ public:
         int E
     );
 
-    // ── Interface V1LDProblem ─────────────────────────────────────────────────
+    // ── Interface SLDProblem ─────────────────────────────────────────────────
     int           n_vars()  const override { return E_ * T_ * SSP_SIGMA_SIZE; }
     int           N_scen()  const override { return N_; }
     double        epsilon() const override { return epsilon_; }

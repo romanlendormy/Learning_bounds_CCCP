@@ -11,13 +11,13 @@ m=1, fixé en dur ci-dessous (pas de --m en CLI, même choix que collect_kp.py)
 pour éviter toute confusion avec le CC-MKP.
 
 ⚠️ Ne PAS confondre avec collect_kp.py (lignée collect_large.py — mode
-v1ld, sans sampling, time_limit illimité). Ce script-ci reproduit la lignée
+sld, sans sampling, time_limit illimité). Ce script-ci reproduit la lignée
 qui a RÉELLEMENT servi à collecter train_base_s10 côté MKP : pruning CP pur
 (REF, aucune borne calculée pendant la collecte), les labels θ/ζ sont
 recalculés a posteriori côté Python au chargement (cf.
-gnn/train_scaled_v1ld.py). C'est ce qui permet de scaler à 10 000
-instances/combo sans buter sur le coût par nœud de V1LD (cf. sweep
-sweep_kp_gecode_grid.py : V1LD timeout déjà à n=20/N≥250, REF non).
+gnn/train_scaled_sld.py). C'est ce qui permet de scaler à 10 000
+instances/combo sans buter sur le coût par nœud de SLD (cf. sweep
+sweep_kp_gecode_grid.py : SLD timeout déjà à n=20/N≥250, REF non).
 
 À la fin de chaque B&B (chaque appel binaire / chaque epsilon), seuls
 `--sample_rate` (défaut 10 %) des nœuds collectés pour cette instance sont

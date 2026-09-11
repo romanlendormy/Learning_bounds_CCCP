@@ -17,4 +17,4 @@ source "$HOME/envs/learning_bounds/bin/activate"
 export OMP_NUM_THREADS=2
 
 python3 "$REPO/gnn_ssp/dump_ckpt_args.py" \
-  "$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_v1cld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
+  "$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_dld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"

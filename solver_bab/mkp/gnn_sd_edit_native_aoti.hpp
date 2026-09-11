@@ -10,7 +10,7 @@
  * recherche comparés indépendamment (gain wall-clock ×1.77-1.79 mesuré,
  * cf. mémoire "aoti-sdedit-wallclock-result"), on ne veut pas qu'une
  * modification de l'un affecte l'autre via une abstraction commune.
- * build_graph_cpp()/lagrangian_v1ld_cpp() sont donc dupliqués mot pour mot
+ * build_graph_cpp()/lagrangian_sld_cpp() sont donc dupliqués mot pour mot
  * depuis gnn_sd_edit_native.cpp (seule la section chargement/forward change).
  *
  * Différence structurelle majeure avec le backend TorchScript : l'export

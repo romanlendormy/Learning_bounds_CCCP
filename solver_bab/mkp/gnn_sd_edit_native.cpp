@@ -2,13 +2,13 @@
  * gnn_sd_edit_native.cpp — Implémentation (cf. gnn_sd_edit_native.hpp).
  *
  * Inférence via TorchScript (torch::jit::script::Module), identique dans son
- * principe à gnn_v1ld_native.cpp — SEULE différence : build_graph_cpp()
+ * principe à gnn_sld_native.cpp — SEULE différence : build_graph_cpp()
  * construit les arêtes scénario-scénario en étoile (ancrée au scénario 0,
  * poids 1.0) au lieu de la clique complète (poids 1/N_z), cf.
- * gnn_sd_edit/train_v1LD_sd_edit.py:265-277. Les features de nœuds, le calcul
- * de L1(λ) (lagrangian_v1ld_cpp, topologie-agnostique — ne lit que
+ * gnn_sd_edit/train_SLD_sd_edit.py:265-277. Les features de nœuds, le calcul
+ * de L1(λ) (lagrangian_sld_cpp, topologie-agnostique — ne lit que
  * A_g/b_res_g/c_g/lam, jamais edge_index/edge_weight) et l'export TorchScript
- * sont dupliqués tels quels depuis gnn_v1ld_native.cpp (duplication volontaire
+ * sont dupliqués tels quels depuis gnn_sld_native.cpp (duplication volontaire
  * plutôt que factorisation — cf. commentaire du .hpp).
  *
  * ζ (solve_zeta_batch, gnn/bnb_solver.cpp, #pragma omp parallel for sur les
@@ -49,7 +49,7 @@ namespace {
 
 // ── Templates d'arêtes précalculés UNE FOIS (à la construction de
 //    GNNSdEditNative, pas à chaque nœud) — port direct de la vectorisation
-//    déployée côté homogène (gnn_v1ld_native.cpp:69-135, cf. mémoire
+//    déployée côté homogène (gnn_sld_native.cpp:69-135, cf. mémoire
 //    "gnn_edges_vectorized_deployed"), jamais portée ici jusqu'ici : ce
 //    fichier construisait encore les arêtes avec des boucles scalaires +
 //    push_back à chaque appel query(), alors que sd_edit est la variante
@@ -124,7 +124,7 @@ std::pair<torch::Tensor, torch::Tensor> build_edges_vectorized(
     return {edge_index, edge_weight};
 }
 
-// ── build_graph (port de gnn_sd_edit.train_v1LD_sd_edit.build_graph) ────────
+// ── build_graph (port de gnn_sd_edit.train_SLD_sd_edit.build_graph) ────────
 // z_mask est toujours "libre" dans notre usage B&B (le more() C++ appelant ne
 // fixe jamais aucun scénario) — même hypothèse que la variante homogène.
 // N_z = N, n_fixed_z1 = 0 en conséquence.
@@ -133,7 +133,7 @@ struct BuiltGraph {
     Vec3d A_g; Vec2d b_res_g; Vec1d c_g;
     int n_g, N_z, N, n_fixed_z1;
     double c_scale;
-    // Diagnostic (même convention que gnn_v1ld_native.cpp) : part du temps de
+    // Diagnostic (même convention que gnn_sld_native.cpp) : part du temps de
     // construction passée dans le calcul des features de nœuds vs dans la
     // génération des index/poids d'arêtes — jusqu'ici jamais peuplée pour
     // cette variante (t_graph_features_s/t_graph_edges_s restaient à 0 dans
@@ -247,7 +247,7 @@ BuiltGraph build_graph_cpp(int n, int m, int N, const Vec1d& c, const Vec3d& A, 
     //    ci-dessus) : item_varies = clique complète par scénario (poids
     //    1/n_g, identique à la variante homogène) ; scenario_varies = ÉTOILE
     //    ancrée au scénario 0 (poids 1.0), seule différence avec la variante
-    //    homogène — cf. gnn_sd_edit/train_v1LD_sd_edit.py:265-277.
+    //    homogène — cf. gnn_sd_edit/train_SLD_sd_edit.py:265-277.
     auto [edge_index_v, edge_weight_v] = build_edges_vectorized(n_g, N_z, edge_tpl, device);
     g.edge_index = edge_index_v;
     g.edge_weight = edge_weight_v;
@@ -270,10 +270,10 @@ BuiltGraph build_graph_cpp(int n, int m, int N, const Vec1d& c, const Vec3d& A, 
     return g;
 }
 
-// ── lagrangian_v1ld (port de gnn.train_gnn_v1ld.lagrangian_v1ld) ────────────
+// ── lagrangian_sld (port de gnn.train_gnn_sld.lagrangian_sld) ────────────
 // Topologie-agnostique : ne lit que A_g/b_res_g/c_g/lam — identique mot pour
-// mot à gnn_v1ld_native.cpp (dupliqué plutôt que partagé, cf. .hpp).
-double lagrangian_v1ld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double epsilon) {
+// mot à gnn_sld_native.cpp (dupliqué plutôt que partagé, cf. .hpp).
+double lagrangian_sld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double epsilon) {
     int N_z = g.N_z, n_g = g.n_g, m = static_cast<int>(g.A_g[0].size());
     auto lam_2d = lam.view({N_z, n_g}).to(torch::kFloat64).contiguous();
     auto lam_acc = lam_2d.accessor<double, 2>();
@@ -333,7 +333,7 @@ double lagrangian_v1ld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double
 }
 
 // ── Export TorchScript one-shot (fork python, mis en cache) ─────────────────
-// Identique à gnn_v1ld_native.cpp : gnn_sd_edit/gnn_v1ld_scriptable.py est
+// Identique à gnn_sld_native.cpp : gnn_sd_edit/gnn_sld_scriptable.py est
 // topologie-agnostique (tenseurs bruts X/edge_index/edge_weight/context),
 // donc réutilisable tel quel pour un checkpoint entraîné sur sd_edit — pas
 // de script d'export séparé nécessaire.
@@ -345,7 +345,7 @@ std::string ensure_scripted_export(const std::string& checkpoint_path, const std
     if (file_exists(scripted_path) && file_mtime(scripted_path) >= file_mtime(checkpoint_path))
         return scripted_path;
 
-    std::string script = "gnn_sd_edit/gnn_v1ld_scriptable.py";
+    std::string script = "gnn_sd_edit/gnn_sld_scriptable.py";
 
     std::vector<char*> argv = {
         const_cast<char*>(python_exe.c_str()), const_cast<char*>(script.c_str()),
@@ -361,7 +361,7 @@ std::string ensure_scripted_export(const std::string& checkpoint_path, const std
     int status = 0;
     ::waitpid(pid, &status, 0);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        throw std::runtime_error("GNNSdEditNative: gnn_v1ld_scriptable.py a échoué (checkpoint invalide ?)");
+        throw std::runtime_error("GNNSdEditNative: gnn_sld_scriptable.py a échoué (checkpoint invalide ?)");
     return scripted_path;
 }
 
@@ -386,7 +386,7 @@ GNNSdEditNative::GNNSdEditNative(const std::string& checkpoint_path, const std::
     for (double pi : p)
         if (std::abs(pi - p_unif) > 1e-9)
             throw std::invalid_argument(
-                "GNNSdEditNative : p non-uniforme — lagrangian_v1ld suppose des "
+                "GNNSdEditNative : p non-uniforme — lagrangian_sld suppose des "
                 "scénarios équiprobables (p_i = 1/N)");
 
     if (device == "cuda") {
@@ -418,7 +418,7 @@ double GNNSdEditNative::query(const std::vector<int8_t>& x_mask, const Vec2d& b_
 
     auto t0 = Clock::now();
     // b_res est déjà à jour (maintenu incrémentalement par l'appelant, cf.
-    // MKPSpaceV1LD::b_res dans gecode_bab.hpp) — ne PLUS le recalculer ici
+    // MKPSpaceSLD::b_res dans gecode_bab.hpp) — ne PLUS le recalculer ici
     // depuis x_mask : l'ancienne version reparcourait TOUTES les variables
     // fixées à 1 depuis la racine à chaque appel (coût croissant avec la
     // profondeur, cf. mémoire "review niveau 1, point B").
@@ -443,7 +443,7 @@ double GNNSdEditNative::query(const std::vector<int8_t>& x_mask, const Vec2d& b_
     torch::Tensor lam = h_out * g.c_scale / static_cast<double>(g.N);
     auto t2 = Clock::now();
 
-    double ub_relative = lagrangian_v1ld_cpp(lam, g, impl_->epsilon);
+    double ub_relative = lagrangian_sld_cpp(lam, g, impl_->epsilon);
     auto t3 = Clock::now();
 
     timing.t_graph_build_s    = std::chrono::duration<double>(t1 - t0).count();

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gnn_light.py — Variante allégée de gnn_sd_edit.gnn_v1ld_scriptable.GNNScriptable
+gnn_light.py — Variante allégée de gnn_sd_edit.gnn_sld_scriptable.GNNScriptable
 (architecture sd_edit) pour réduire le coût d'inférence en B&B.
 
 Deux changements par rapport à GNNScriptable, rien d'autre :
@@ -9,8 +9,8 @@ Deux changements par rapport à GNNScriptable, rien d'autre :
   - hidden=64 par défaut au lieu de 128.
 
 Le reste (embed, pooling item/scénario/graphe, tête, contexte 9-dim,
-center_lam) est identique à GNNScriptable — cf. gnn_sd_edit/train_v1LD_sd_edit.py
-et gnn_sd_edit/gnn_v1ld_scriptable.py pour la référence complète. Réutilise
+center_lam) est identique à GNNScriptable — cf. gnn_sd_edit/train_SLD_sd_edit.py
+et gnn_sd_edit/gnn_sld_scriptable.py pour la référence complète. Réutilise
 GatedGraphConvScriptable telle quelle (pas de duplication).
 
 Nouvelle architecture => pas de state_dict compatible avec un checkpoint
@@ -32,7 +32,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402
+from gnn_sd_edit.gnn_sld_scriptable import GatedGraphConvScriptable  # noqa: E402
 
 
 class GNNLightScriptable(nn.Module):
@@ -112,12 +112,12 @@ class GNNLightScriptable(nn.Module):
 class GNNLight(nn.Module):
     """
     Port entraînable (torch_geometric, autograd) de GNNLightScriptable —
-    même relation que gnn_sd_edit.train_v1LD_sd_edit.GNN vis-à-vis de
-    gnn_sd_edit.gnn_v1ld_scriptable.GNNScriptable : ce module prend un objet
+    même relation que gnn_sd_edit.train_SLD_sd_edit.GNN vis-à-vis de
+    gnn_sd_edit.gnn_sld_scriptable.GNNScriptable : ce module prend un objet
     pyg_data.Data (comme GNN) et sert à l'entraînement/l'overfit, pas à
     l'export TorchScript.
 
-    Identique à gnn_sd_edit.train_v1LD_sd_edit.GNN sauf 1 couche de message
+    Identique à gnn_sd_edit.train_SLD_sd_edit.GNN sauf 1 couche de message
     passing (conv1 seul, pas de conv2/skip) et hidden=64 par défaut au lieu
     de 128 en production — cf. gnn_light.py (module) pour le rationale complet.
     """

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-train_scaled_sd_edit.py — Entraînement GNN V1LD "sd_edit" sur ~10 000 graphes
+train_scaled_sd_edit.py — Entraînement GNN SLD "sd_edit" sur ~10 000 graphes
 diversifiés (n=10/20, N=20/50/100, data/train_base_s10).
 
-Miroir strict de gnn/train_scaled_v1ld.py — seule différence : le modèle et
+Miroir strict de gnn/train_scaled_sld.py — seule différence : le modèle et
 les fonctions de borne/vérification viennent de
-gnn_sd_edit/train_v1LD_sd_edit.py (arêtes inter-scénarios en étoile ancrée
+gnn_sd_edit/train_SLD_sd_edit.py (arêtes inter-scénarios en étoile ancrée
 au scénario 0, au lieu d'une clique complète, cf. docstring de ce module).
 Chargement des données, sélection stratifiée, split train/test, warmup
 supervisé, boucle d'entraînement et éval : identiques, dupliqués ici tels
 quels pour ne pas faire dépendre gnn_sd_edit/ de gnn/ au-delà du binaire B&B
-partagé (déjà le cas dans train_v1LD_sd_edit.py).
+partagé (déjà le cas dans train_SLD_sd_edit.py).
 
 Usage :
     python gnn_sd_edit/train_scaled_sd_edit.py
@@ -37,9 +37,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT  = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn_sd_edit.train_v1LD_sd_edit import (
+from gnn_sd_edit.train_SLD_sd_edit import (
     load_instances, LazyGraphDataset, EagerGraphDataset,
-    GNN, lagrangian_v1ld, verify_v1ld,
+    GNN, lagrangian_sld, verify_sld,
 )
 from gnn_sd_edit.gnn_light import GNNLight
 from torch_geometric.loader import DataLoader
@@ -51,7 +51,7 @@ from torch_geometric.loader import DataLoader
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Entraîne GNN V1LD sd_edit sur ~10k graphes stratifiés (n=10/20, N variés).",
+        description="Entraîne GNN SLD sd_edit sur ~10k graphes stratifiés (n=10/20, N variés).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # ── Données ───────────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ def discover_pairs(
 
 def _parse_full_node_record(line: str, inst: dict) -> dict | None:
     """Parse complet d'une ligne nodes_*.txt (formats B et C, cf. load_raw_nodes
-    dans train_v1LD_sd_edit.py — logique dupliquée ici volontairement pour ne
+    dans train_SLD_sd_edit.py — logique dupliquée ici volontairement pour ne
     pas toucher ce module partagé par les autres scripts diag)."""
     vals = [float(x) for x in line.split(",")]
     inst_id   = int(vals[0])
@@ -507,7 +507,7 @@ def warmup_on_roots(
     lam_targets = []
     for g in graphs:
         g.cpu()  # in-place dans PyG
-        _, lam_star = verify_v1ld(g, T=args.warmup_T, return_lam=True)
+        _, lam_star = verify_sld(g, T=args.warmup_T, return_lam=True)
         lam_targets.append(
             torch.tensor(lam_star.astype(np.float32).flatten(),
                          dtype=torch.float32, device=device))
@@ -539,7 +539,7 @@ def warmup_on_roots(
         if ep % max(1, args.n_warmup // 10) == 0 or ep == args.n_warmup:
             model.eval()
             with torch.no_grad():
-                l1_vals = [lagrangian_v1ld(model(g), g).item() / max(float(g.c_scale), 1.0)
+                l1_vals = [lagrangian_sld(model(g), g).item() / max(float(g.c_scale), 1.0)
                            for g in graphs]
             model.train()
             print(f"[warmup] ep {ep:4d}/{args.n_warmup}  mse={mse_sum/n_wm:.6f}  "
@@ -554,7 +554,7 @@ def warmup_on_roots(
 
 def compute_l1_zero(graphs: list, device: torch.device) -> np.ndarray:
     with torch.no_grad():
-        return np.array([lagrangian_v1ld(torch.zeros(g.N_z * g.n_g, device=device), g).item()
+        return np.array([lagrangian_sld(torch.zeros(g.N_z * g.n_g, device=device), g).item()
                          for g in graphs])
 
 
@@ -567,7 +567,7 @@ def eval_epoch(graphs, l1_zeros, model, device, center_lam=False):
             lam    = model(g)
             if center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
-            l1_gnn = lagrangian_v1ld(lam, g).item()
+            l1_gnn = lagrangian_sld(lam, g).item()
             lam_2d = lam.view(int(g.N_z), int(g.n_g))
             l1_vals.append(l1_gnn)
             t2_vals.append(lam_2d.std(dim=0).mean().item())
@@ -588,7 +588,7 @@ def eval_loss_epoch(graphs, model, device, center_lam=False):
             if center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
             c_scale = max(float(g.c_scale), 1.0)
-            total += lagrangian_v1ld(lam, g).item() / c_scale
+            total += lagrangian_sld(lam, g).item() / c_scale
     model.train()
     return total / max(len(graphs), 1)
 
@@ -602,7 +602,7 @@ def eval_by_n(graphs, l1_zeros, model, device, center_lam=False):
             lam    = model(g)
             if center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
-            l1_gnn = lagrangian_v1ld(lam, g).item()
+            l1_gnn = lagrangian_sld(lam, g).item()
             by_n.setdefault(n_key, {"l1": [], "better": []})
             by_n[n_key]["l1"].append(l1_gnn)
             by_n[n_key]["better"].append(int(l1_gnn < l0))
@@ -624,7 +624,7 @@ def eval_by_depth(graphs, l1_zeros, model, device, center_lam=False):
             lam    = model(g)
             if center_lam:
                 lam = _apply_center(lam, int(g.N_z), int(g.n_g))
-            l1_gnn = lagrangian_v1ld(lam, g).item()
+            l1_gnn = lagrangian_sld(lam, g).item()
             by_d.setdefault(d_key, {"l1": [], "better": []})
             by_d[d_key]["l1"].append(l1_gnn)
             by_d[d_key]["better"].append(int(l1_gnn < l0))
@@ -754,7 +754,7 @@ def main() -> None:
 
     log(f"Précalcul baseline sous-gradient eval (T={args.eval_sg_T}, {len(eval_graphs)} graphes) ...")
     t0_sg = time.time()
-    l1_sg_eval = np.array([verify_v1ld(g.cpu(), T=args.eval_sg_T) for g in eval_graphs])
+    l1_sg_eval = np.array([verify_sld(g.cpu(), T=args.eval_sg_T) for g in eval_graphs])
     for g in eval_graphs:
         g.to(device)
     log(f"  fait en {time.time()-t0_sg:.1f}s  mean L1_sg(T={args.eval_sg_T}) = {np.mean(l1_sg_eval):.2f}")
@@ -915,7 +915,7 @@ def main() -> None:
             else:
                 w = 1.0
 
-            l1_raw = lagrangian_v1ld(lam, g)
+            l1_raw = lagrangian_sld(lam, g)
             epoch_l1_train += l1_raw.detach().item()
             loss = (l1_raw / c_scale
                     + args.alpha_l2 * (lam ** 2).mean()) * w
@@ -1032,7 +1032,7 @@ def main() -> None:
             axes[2].set(xlabel="Epoch", ylabel="pct_better (%)",
                         title="% eval : L1_GNN < L1(λ=0)")
             axes[2].grid(True, alpha=0.3)
-        plt.suptitle(f"GNN V1LD sd_edit scaled — {run_name}", fontsize=10)
+        plt.suptitle(f"GNN SLD sd_edit scaled — {run_name}", fontsize=10)
         plt.tight_layout()
         plt.savefig(fig_path, dpi=120, bbox_inches="tight")
         plt.close(fig)
@@ -1047,7 +1047,7 @@ def main() -> None:
             if (int(g.n_orig.item()) if hasattr(g, "n_orig") else 0) <= args.quality_max_n
         ]
         if quality_eligible:
-            log(f"[quality] verify_v1ld (T={args.quality_T}) "
+            log(f"[quality] verify_sld (T={args.quality_T}) "
                 f"sur {len(quality_eligible)} graphes eval (n≤{args.quality_max_n}) ...")
             t0 = time.time()
             q_subgrad, q_gnn, q_n = [], [], []
@@ -1055,13 +1055,13 @@ def main() -> None:
             dev = next(model.parameters()).device
             for j, (g, n_val) in enumerate(quality_eligible):
                 g_cpu = g.cpu()
-                sg = verify_v1ld(g_cpu, T=args.quality_T)
+                sg = verify_sld(g_cpu, T=args.quality_T)
                 g_dev = g.to(dev)
                 with torch.no_grad():
                     lam_q = model(g_dev)
                     if args.center_lam:
                         lam_q = _apply_center(lam_q, int(g_dev.N_z), int(g_dev.n_g))
-                    gnn_l1 = lagrangian_v1ld(lam_q, g_dev).item()
+                    gnn_l1 = lagrangian_sld(lam_q, g_dev).item()
                 q_subgrad.append(sg)
                 q_gnn.append(gnn_l1)
                 q_n.append(n_val)

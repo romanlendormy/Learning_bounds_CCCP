@@ -3,11 +3,11 @@
 # run_gnn_vs_subgrad_n15.sh à n∈{20,25,30} (n=15 déjà fait séparément).
 #
 # Utilise le mécanisme d'arrêt anticipé GNN_COMPARE_BOUND (cf.
-# solve_v1ld/solve_v1cld target_bound, gecode_bab.hpp
+# solve_sld/solve_dld target_bound, gecode_bab.hpp
 # MKPSharedData::gnn_compare_bound) au lieu d'une trace complète jusqu'à
-# T_root=3000 : à n=25, le coût par itération du sous-gradient V1LD (ζ exact
+# T_root=3000 : à n=25, le coût par itération du sous-gradient SLD (ζ exact
 # B&B) est ~500x plus cher qu'à n=15 (cf. mémoire
-# project_ccmkp_trillium_migration, probe_n25_v1ld job 822242 — ~0.5s/iter),
+# project_ccmkp_trillium_migration, probe_n25_sld job 822242 — ~0.5s/iter),
 # donc courir jusqu'à convergence complète est impraticable. À la place :
 #   (a) calcule d'abord la borne GNN root-only (comme avant).
 #   (b) lance le sous-gradient avec GNN_COMPARE_BOUND=<borne GNN> et
@@ -20,8 +20,8 @@
 # pourcentage de gap au lieu de la borne absolue — job 822317).
 #
 # 180 configs au total : n∈{20,25,30} x N∈{100,500,1000} x seed∈43..52 x
-# formulation∈{v1ld,v1cld}. Grille (TASK 0-indexé, 0..179) : formulation =
-# TASK<90 ? v1ld : v1cld ; idx2 = TASK%90 ; n = [20,25,30][idx2/30] ;
+# formulation∈{sld,dld}. Grille (TASK 0-indexé, 0..179) : formulation =
+# TASK<90 ? sld : dld ; idx2 = TASK%90 ; n = [20,25,30][idx2/30] ;
 # idx3 = idx2%30 ; N = [100,500,1000][idx3/10] ; seed = 43+idx3%10.
 #
 # QOS "debug" limite à 1 job SOUMIS à la fois par utilisateur
@@ -94,10 +94,10 @@ run_task() {
     local TASK=$((TASK1 - 1))
     local FORMULATION IDX2 N_ITEMS IDX3 N_SCEN SEED
     if [[ $TASK -lt 90 ]]; then
-        FORMULATION="v1ld"
+        FORMULATION="sld"
         IDX2=$TASK
     else
-        FORMULATION="v1cld"
+        FORMULATION="dld"
         IDX2=$((TASK - 90))
     fi
     N_ITEMS=${N_ITEMS_VALUES[$((IDX2 / 30))]}
@@ -107,17 +107,17 @@ run_task() {
 
     local TESTDIR GNN_MODE SUBGRAD_MODE CKPT
     local -a GNN_EXTRA_ARGS
-    if [[ "$FORMULATION" == "v1ld" ]]; then
-        TESTDIR="$REPO/test_paper/mkp/trillium/v1ld"
+    if [[ "$FORMULATION" == "sld" ]]; then
+        TESTDIR="$REPO/test_paper/mkp/trillium/sld"
         GNN_MODE="gnn_root"
-        SUBGRAD_MODE="v1ld"
+        SUBGRAD_MODE="sld"
         CKPT="$REPO/gnn_sd_edit/runs/train_scaled/ckpt_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_500ep_ep0500.pt"
         GNN_EXTRA_ARGS=(cuda python3 native sd_edit)
     else
-        TESTDIR="$REPO/test_paper/mkp/trillium/v1cld"
-        GNN_MODE="gnn_root_v1cld"
-        SUBGRAD_MODE="v1cld"
-        CKPT="$REPO/gnn_sd_edit/runs_v1cld/ckpt_v1cld_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_v1cld_n10_20_500ep_ep0500.pt"
+        TESTDIR="$REPO/test_paper/mkp/trillium/dld"
+        GNN_MODE="gnn_root_dld"
+        SUBGRAD_MODE="dld"
+        CKPT="$REPO/gnn_sd_edit/runs_dld/ckpt_dld_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_dld_n10_20_500ep_ep0500.pt"
         GNN_EXTRA_ARGS=(cuda python3 native)
     fi
 
@@ -174,7 +174,7 @@ run_task() {
     # profondeur 2, T_node=30, a pris 52s) — laisser T_node=30 fait exploser
     # le temps par noeud une fois sorti de la racine, pour un resultat qu'on
     # n'exploite meme pas. T_node=1 (min non-nul, evite l'overflow de
-    # v1LD_star=+1e18 par defaut si la boucle ne s'executait jamais avec
+    # SLD_star=+1e18 par defaut si la boucle ne s'executait jamais avec
     # T_node=0) rend chaque noeud quasi instantane.
     #
     # timeout externe = TIME_LIMIT_S + 60s de marge — cf. commentaire sur

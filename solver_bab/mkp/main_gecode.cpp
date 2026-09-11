@@ -1,5 +1,5 @@
 /*
- * main_gecode.cpp — CLI pour le B&B Gecode + borne V1LD.
+ * main_gecode.cpp — CLI pour le B&B Gecode + borne SLD.
  *
  * Usage :
  *   bab_mkp_gecode  <dataset.txt>  [epsilon]  [T_node]  [time_limit_s]  [replication]
@@ -11,7 +11,7 @@
 
 #include "gecode_bab.hpp"
 #include "gecode_bab_gnn_batched.hpp"
-#include "gecode_bab_v1cld_gnn_batched.hpp"
+#include "gecode_bab_dld_gnn_batched.hpp"
 
 #include <cmath>
 #include <fstream>
@@ -85,23 +85,23 @@ int main(int argc, char* argv[])
     double      time_limit  = (argc > 4) ? std::stod(argv[4]) : 120.0;
     int         replication = (argc > 5) ? std::stoi(argv[5]) : 0;
     int         T_root      = (argc > 6) ? std::stoi(argv[6])  : 200;
-    // mode : "v1ld" (défaut), "v1cld", "gnn" (borne one-shot pré-entraînée à
+    // mode : "sld" (défaut), "dld", "gnn" (borne one-shot pré-entraînée à
     // CHAQUE nœud), "gnn_root" (même borne one-shot, mais UNE SEULE FOIS à la
     // racine — REF ensuite), "gnn_batched" (borne GNN one-shot sd_edit/native,
     // mais calculée par LOTS de K nœuds en un seul forward — cf.
     // gecode_bab_gnn_batched.hpp, validé sur le sweep de robustesse job
     // 16406490 : mêmes optimaux que REF/gnn sur tout n∈{10,20}×N∈{20,50,100,500})
-    // "gnn_batched_v1cld" (équivalent V1CLD de gnn_batched — cf.
-    // gecode_bab_v1cld_gnn_batched.hpp, backend natif uniquement) ou "ref"
-    // (squelette V1LD nu, sans borne — référence pour isoler l'effet du
+    // "gnn_batched_dld" (équivalent DLD de gnn_batched — cf.
+    // gecode_bab_dld_gnn_batched.hpp, backend natif uniquement) ou "ref"
+    // (squelette SLD nu, sans borne — référence pour isoler l'effet du
     // branchement/incumbent/moteur DFS de l'effet de la borne elle-même).
-    std::string mode_str    = (argc > 7) ? argv[7] : "v1ld";
-    BoundMode   bound_mode  = (mode_str == "v1cld")          ? BoundMode::V1CLD
+    std::string mode_str    = (argc > 7) ? argv[7] : "sld";
+    BoundMode   bound_mode  = (mode_str == "dld")          ? BoundMode::DLD
                             : (mode_str == "gnn")            ? BoundMode::GNN
                             : (mode_str == "gnn_root")       ? BoundMode::GNN_ROOT
-                            : (mode_str == "gnn_root_v1cld") ? BoundMode::GNN_ROOT_V1CLD
+                            : (mode_str == "gnn_root_dld") ? BoundMode::GNN_ROOT_DLD
                             : (mode_str == "ref")            ? BoundMode::REF
-                                                             : BoundMode::V1LD;
+                                                             : BoundMode::SLD;
     // patience : "patience" active le mode convergence, sinon itérations fixes
     // (ignoré en mode gnn : pas de sous-gradient à faire converger)
     bool        patience    = (argc > 8) && std::string(argv[8]) == "patience";
@@ -111,11 +111,11 @@ int main(int argc, char* argv[])
     std::string gnn_device     = (argc > 11) ? argv[11] : "cpu";
     std::string gnn_python_exe = (argc > 12) ? argv[12] : "python3";
     // gnn_backend : "ipc" (défaut, process Python persistant) ou "native"
-    // (build_graph+forward+lagrangian_v1ld réimplémentés en C++/LibTorch,
-    // pas d'IPC par nœud — cf. gnn_v1ld_native.hpp). Ignoré hors mode gnn.
+    // (build_graph+forward+lagrangian_sld réimplémentés en C++/LibTorch,
+    // pas d'IPC par nœud — cf. gnn_sld_native.hpp). Ignoré hors mode gnn.
     std::string gnn_backend    = (argc > 13) ? argv[13] : "ipc";
     // gnn_variant : "homogene" (défaut, arêtes scénario = clique) ou "sd_edit"
-    // (arêtes scénario = étoile, cf. gnn_sd_edit/train_v1LD_sd_edit.py et
+    // (arêtes scénario = étoile, cf. gnn_sd_edit/train_SLD_sd_edit.py et
     // gnn_sd_edit_native.hpp) — les deux backends (ipc, native) supportent
     // les deux variantes. Ignoré hors mode gnn.
     std::string gnn_variant    = (argc > 14) ? argv[14] : "homogene";
@@ -150,19 +150,19 @@ int main(int argc, char* argv[])
     // de borne GNN), cf. doc gecode_bab_gnn_batched.hpp. Argument 19 (pas 18,
     // déjà pris par K). Défaut 1.0 = jamais de bypass (comportement historique).
     double      gnn_batched_max_depth_frac = (argc > 19) ? std::stod(argv[19]) : 1.0;
-    // zeta_method : modes v1ld ET gnn_batched (ignoré ailleurs — gnn/gnn_root
+    // zeta_method : modes sld ET gnn_batched (ignoré ailleurs — gnn/gnn_root
     // non-batché pas encore câblés) — méthode utilisée pour résoudre ζ_i.
     // "bnb" (défaut, historique/prod) ou "surrogate" (borne de branchement
     // agrégée au lieu du min de m relaxations séparées) :
-    //   - mode v1ld : MKPProblemBnB vs MKPProblemBnBSurrogate (gecode_bab.hpp
+    //   - mode sld : MKPProblemBnB vs MKPProblemBnBSurrogate (gecode_bab.hpp
     //     / MKPSharedData::use_surrogate_zeta, solver_generic/mkp/).
     //   - mode gnn_batched : ζ_i résolu APRÈS la prédiction λ du GNN (calcul
     //     de L1(λ)) via solve_zeta_batch vs solve_zeta_batch_surrogate
     //     (gnn/bnb_solver.cpp, cf. GNNSdEditNativeBatched::use_surrogate_zeta).
     // Même valeur ζ_i exacte dans les deux méthodes (seule la preuve
     // d'optimalité interne diffère) — validé ×2.25 plus rapide dans le B&B
-    // V1LD séquentiel (n=20/N=100), cf. mémoire
-    // project_compare_v1ld_zeta_bnb_surrogate. Argument 21 (20 déjà pris par
+    // SLD séquentiel (n=20/N=100), cf. mémoire
+    // project_compare_sld_zeta_bnb_surrogate. Argument 21 (20 déjà pris par
     // gnn_batched_max_depth_frac, mode gnn_batched).
     std::string zeta_method_str = (argc > 20) ? argv[20] : "bnb";
     bool        use_surrogate_zeta = (zeta_method_str == "surrogate");
@@ -180,27 +180,27 @@ int main(int argc, char* argv[])
     // gnn_sd_edit_native_aoti_batched_static.hpp). Argument 23.
     std::string gnn_batched_backend = (argc > 22) ? argv[22] : "native";
 
-    if ((mode_str == "gnn_batched" || mode_str == "gnn_batched_v1cld") && gnn_checkpoint.empty()) {
+    if ((mode_str == "gnn_batched" || mode_str == "gnn_batched_dld") && gnn_checkpoint.empty()) {
         std::cerr << "Erreur : mode=" << mode_str << " requiert un chemin de checkpoint "
                      "(argument 10) — usage :\n"
                      "  bab_mkp_gecode <dataset> [eps] [T_node] [time_lim] [rep] [T_root] "
-                     "gnn_batched|gnn_batched_v1cld <ckpt.pt> [device=cpu] [-] [-] [-] [-] [-] [-] [K=64] "
+                     "gnn_batched|gnn_batched_dld <ckpt.pt> [device=cpu] [-] [-] [-] [-] [-] [-] [K=64] "
                      "[gnn_max_depth_frac=1.0]\n"
-                     "  (arguments 12-17 ignorés en mode gnn_batched/gnn_batched_v1cld : pas d'IPC, pas de "
+                     "  (arguments 12-17 ignorés en mode gnn_batched/gnn_batched_dld : pas d'IPC, pas de "
                      "variante autre que sd_edit, pas de gating profondeur/gap min)\n";
         return 1;
     }
 
     if ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
-         bound_mode == BoundMode::GNN_ROOT_V1CLD) && gnn_checkpoint.empty()) {
-        std::cerr << "Erreur : mode=gnn/gnn_root/gnn_root_v1cld requiert un chemin de checkpoint "
+         bound_mode == BoundMode::GNN_ROOT_DLD) && gnn_checkpoint.empty()) {
+        std::cerr << "Erreur : mode=gnn/gnn_root/gnn_root_dld requiert un chemin de checkpoint "
                      "(argument 10) — usage :\n"
                      "  bab_mkp_gecode <dataset> [eps] [T_node] [time_lim] "
-                     "[rep] [T_root] gnn|gnn_root|gnn_root_v1cld <ckpt.pt> [device=cpu] "
+                     "[rep] [T_root] gnn|gnn_root|gnn_root_dld <ckpt.pt> [device=cpu] "
                      "[python_exe=python3] [backend=ipc|native] [variant=homogene|sd_edit] "
                      "[gnn_min_depth_frac=0.0] [gnn_min_gap_frac=0.0] [gnn_max_depth_frac=1.0]\n"
-                     "  (mode gnn_root_v1cld : backend=native uniquement, variant/python_exe "
-                     "ignorés — cf. GNNV1CLDSdEditNative, gnn_v1cld_sd_edit_native.hpp)\n";
+                     "  (mode gnn_root_dld : backend=native uniquement, variant/python_exe "
+                     "ignorés — cf. GNNDLDSdEditNative, gnn_dld_sd_edit_native.hpp)\n";
         return 1;
     }
 
@@ -208,9 +208,9 @@ int main(int argc, char* argv[])
 
     // ── mode=gnn_batched : moteur DFS + backend GNN entièrement séparés
     // (solve_gecode_bab_mkp_gnn_batched, gecode_bab_gnn_batched.hpp) — ne
-    // partage ni BoundMode ni MKPSpaceV1LD/solve_gecode_bab_mkp avec les
-    // autres modes, donc traité à part ici et retourne avant le chemin V1LD/
-    // V1CLD/GNN/GNN_ROOT/REF ci-dessous (intact, non modifié par ce merge).
+    // partage ni BoundMode ni MKPSpaceSLD/solve_gecode_bab_mkp avec les
+    // autres modes, donc traité à part ici et retourne avant le chemin SLD/
+    // DLD/GNN/GNN_ROOT/REF ci-dessous (intact, non modifié par ce merge).
     if (mode_str == "gnn_batched") {
         std::cout << "═══════════════════════════════════════════════════\n";
         std::cout << "  CCMKP — Gecode BAB + borne GNN BATCHÉE (K=" << gnn_batched_K
@@ -287,22 +287,22 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    // ── mode=gnn_batched_v1cld : équivalent V1CLD de gnn_batched ci-dessus —
-    // même moteur DFS+bucketing (solve_gecode_bab_mkp_v1cld_gnn_batched,
-    // gecode_bab_v1cld_gnn_batched.hpp), même CLI, seul le backend GNN et la
+    // ── mode=gnn_batched_dld : équivalent DLD de gnn_batched ci-dessus —
+    // même moteur DFS+bucketing (solve_gecode_bab_mkp_dld_gnn_batched,
+    // gecode_bab_dld_gnn_batched.hpp), même CLI, seul le backend GNN et la
     // borne changent (ζ_{i,j} par (scénario,contrainte) au lieu de ζ_i par
     // scénario). Seul gnn_batched_backend="native" supporté (pas d'AOTInductor
-    // V1CLD pour l'instant, cf. doc de header).
-    if (mode_str == "gnn_batched_v1cld") {
+    // DLD pour l'instant, cf. doc de header).
+    if (mode_str == "gnn_batched_dld") {
         if (gnn_batched_backend != "native") {
-            std::cerr << "Erreur : mode=gnn_batched_v1cld ne supporte que "
+            std::cerr << "Erreur : mode=gnn_batched_dld ne supporte que "
                          "gnn_batched_backend=native pour l'instant (reçu \""
                       << gnn_batched_backend << "\")\n";
             return 1;
         }
 
         std::cout << "═══════════════════════════════════════════════════\n";
-        std::cout << "  CCMKP — Gecode BAB + borne V1CLD GNN BATCHÉE (K=" << gnn_batched_K
+        std::cout << "  CCMKP — Gecode BAB + borne DLD GNN BATCHÉE (K=" << gnn_batched_K
                   << ", sd_edit, " << gnn_batched_backend << ")\n";
         std::cout << "═══════════════════════════════════════════════════\n";
         std::cout << "  Fichier : " << dataset << "\n";
@@ -317,7 +317,7 @@ int main(int argc, char* argv[])
                   << "\n";
         std::cout << "───────────────────────────────────────────────────\n";
 
-        GNNBatchedBabResult res = solve_gecode_bab_mkp_v1cld_gnn_batched(
+        GNNBatchedBabResult res = solve_gecode_bab_mkp_dld_gnn_batched(
             inst.n, inst.m, inst.N, epsilon, inst.c, inst.p, inst.A, inst.b,
             time_limit, gnn_batched_K, gnn_checkpoint, gnn_device, gnn_batched_max_depth_frac,
             use_surrogate_zeta, gnn_node_stride, gnn_batched_backend);
@@ -378,11 +378,11 @@ int main(int argc, char* argv[])
 
     std::cout << "═══════════════════════════════════════════════════\n";
     std::cout << "  CCMKP — Gecode BAB + borne "
-              << (bound_mode == BoundMode::V1LD          ? "V1LD (ζ exact B&B)"
-                : bound_mode == BoundMode::V1CLD         ? "V1CLD (ζ DP 1D exact)"
+              << (bound_mode == BoundMode::SLD          ? "SLD (ζ exact B&B)"
+                : bound_mode == BoundMode::DLD         ? "DLD (ζ DP 1D exact)"
                 : bound_mode == BoundMode::REF           ? "REF (squelette nu, sans borne)"
-                : bound_mode == BoundMode::GNN_ROOT      ? "GNN_ROOT (one-shot V1LD, racine seulement, REF ensuite)"
-                : bound_mode == BoundMode::GNN_ROOT_V1CLD ? "GNN_ROOT_V1CLD (one-shot V1CLD, racine seulement, REF ensuite)"
+                : bound_mode == BoundMode::GNN_ROOT      ? "GNN_ROOT (one-shot SLD, racine seulement, REF ensuite)"
+                : bound_mode == BoundMode::GNN_ROOT_DLD ? "GNN_ROOT_DLD (one-shot DLD, racine seulement, REF ensuite)"
                                                           : "GNN (one-shot, pas de sous-gradient)")
               << "\n";
     std::cout << "═══════════════════════════════════════════════════\n";
@@ -394,16 +394,16 @@ int main(int argc, char* argv[])
               << "  time_limit=" << time_limit << "s"
               << "  mode=" << mode_str
               << (patience ? ("  patience=oui(tol=" + std::to_string(patience_tol) + ")") : "  patience=non")
-              << ((bound_mode == BoundMode::V1LD && use_surrogate_zeta) ? "  zeta_method=surrogate" : "")
+              << ((bound_mode == BoundMode::SLD && use_surrogate_zeta) ? "  zeta_method=surrogate" : "")
               << ((bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
-                   bound_mode == BoundMode::GNN_ROOT_V1CLD) ? ("  gnn_backend=" + gnn_backend + "  gnn_variant=" + gnn_variant) : "")
+                   bound_mode == BoundMode::GNN_ROOT_DLD) ? ("  gnn_backend=" + gnn_backend + "  gnn_variant=" + gnn_variant) : "")
               << ((bound_mode == BoundMode::GNN && gnn_min_depth_frac > 0.0) ? ("  gnn_min_depth_frac=" + std::to_string(gnn_min_depth_frac)) : "")
               << ((bound_mode == BoundMode::GNN && gnn_min_gap_frac > 0.0) ? ("  gnn_min_gap_frac=" + std::to_string(gnn_min_gap_frac)) : "")
               << ((bound_mode == BoundMode::GNN && gnn_max_depth_frac < 1.0) ? ("  gnn_max_depth_frac=" + std::to_string(gnn_max_depth_frac)) : "")
               << "\n";
     std::cout << "───────────────────────────────────────────────────\n";
 
-    GecodeV1LDResult res = solve_gecode_bab_mkp(
+    GecodeSLDResult res = solve_gecode_bab_mkp(
         inst.n, inst.m, inst.N, epsilon,
         inst.c, inst.p, inst.A, inst.b,
         time_limit, T_root, T_node, bound_mode,
@@ -451,7 +451,7 @@ int main(int argc, char* argv[])
               << " / " << (inst.n + inst.N) << " max théorique\n\n";
 
     std::cout << "  Échecs totaux             : " << res.fails      << "\n";
-    std::cout << "    dont borne V1LD         : " << res.fails_from_bound
+    std::cout << "    dont borne SLD         : " << res.fails_from_bound
               << "  (" << std::fixed << std::setprecision(1)
               << (res.fails > 0 ? 100.0 * res.fails_from_bound / res.fails : 0.0)
               << "% des fails)\n";
@@ -462,7 +462,7 @@ int main(int argc, char* argv[])
 
     std::cout << "  Améliorations incumbent             : " << res.incumbent_improvements << "\n";
     std::cout << "  Appels more() (commits réussis)     : " << res.more_calls << "\n";
-    std::cout << "  UB V1LD utile (réduit obj.max)      : " << res.ub_tightened
+    std::cout << "  UB SLD utile (réduit obj.max)      : " << res.ub_tightened
               << " / " << res.more_calls
               << "  (" << std::fixed << std::setprecision(1)
               << (res.more_calls > 0 ? 100.0 * res.ub_tightened / res.more_calls : 0.0)
@@ -500,7 +500,7 @@ int main(int argc, char* argv[])
               << "    dont dispatch brancher/CP hors clone : " << std::setprecision(4)
               << (res.t_bab_pure_s - res.t_clone_total_s) << " s\n";
     if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
-        bound_mode == BoundMode::GNN_ROOT_V1CLD) {
+        bound_mode == BoundMode::GNN_ROOT_DLD) {
         std::cout << std::setprecision(4);
         std::cout << "  --- décomposition borne GNN (cumulée sur " << res.more_calls << " appels) ---\n";
         std::cout << "  Construction de graphe    : " << res.t_gnn_graph_build_s   << " s\n";

@@ -1,8 +1,8 @@
 #pragma once
 /*
- * gecode_bab_ssp.hpp — B&B Gecode pour le CCSSP avec borne v1LD/v1CLD à chaque nœud.
+ * gecode_bab_ssp.hpp — B&B Gecode pour le CCSSP avec borne SLD/DLD à chaque nœud.
  *
- * Même patron que solver_bab/mkp/gecode_bab.hpp (MKPSpaceV1LD), adapté au SSP —
+ * Même patron que solver_bab/mkp/gecode_bab.hpp (MKPSpaceSLD), adapté au SSP —
  * y compris pour le moteur de recherche : comme pour MKP, la résolution est
  * pilotée par Gecode::BAB<> natif (pas de DFS manuelle — une première version
  * avait introduit une DFS maison façon "pile status()/choice()/commit()", mais
@@ -14,7 +14,7 @@
  * sous-problème résiduel d'un nœud se construit en RÉTRÉCISSANT les tableaux
  * (items fixés retirés). Pour SSP ça ne marche pas — l'automate d'un employé
  * porte sur la séquence complète des T périodes. On MASQUE plutôt :
- * SSPProblemBnB / SSPCLDProblemBnB (solver_generic/ssp) acceptent un masque
+ * SSPProblemBnB / SSPDLDProblemBnB (solver_generic/ssp) acceptent un masque
  * (E×T, -1 = libre, sinon symbole imposé) qui restreint exactement le domaine
  * de maximisation de θ/ζ au sous-polytope du nœud courant — la borne duale
  * reste valide sans terme correctif séparé (cf. commentaires dans ssp_problem.hpp).
@@ -25,18 +25,18 @@
  * ratio demande/salaire (SSPSharedData::branch_order), pour appeler more()
  * après chaque fixation.
  *
- * Convention de signe : SSPProblemBnB/SSPCLDProblemBnB maximisent cost^T x avec
- * cost[e,t,W] = −salary[t] (comme SSPShiftProblem/SSPCLDProblem). Le dual retourné
- * (v1LD_star / v1CLD_star) est donc en convention max(−salaire) ; la borne inférieure
+ * Convention de signe : SSPProblemBnB/SSPDLDProblemBnB maximisent cost^T x avec
+ * cost[e,t,W] = −salary[t] (comme SSPShiftProblem/SSPDLDProblem). Le dual retourné
+ * (SLD_star / DLD_star) est donc en convention max(−salaire) ; la borne inférieure
  * sur le coût salarial réel (à poster sur total_cost, qui MINIMISE) est son opposé.
  */
 
-#include "../../solver_generic/v1ld_base.hpp"
-#include "../../solver_generic/v1ld_solver.hpp"
-#include "../../solver_generic/v1cld_base.hpp"
-#include "../../solver_generic/v1cld_solver.hpp"
+#include "../../solver_generic/sld_base.hpp"
+#include "../../solver_generic/sld_solver.hpp"
+#include "../../solver_generic/dld_base.hpp"
+#include "../../solver_generic/dld_solver.hpp"
 #include "../../solver_generic/ssp/ssp_problem_bnb.hpp"
-#include "../../solver_generic/ssp/ssp_cld_problem_bnb.hpp"
+#include "../../solver_generic/ssp/ssp_dld_problem_bnb.hpp"
 #include "ssp_gnn_bound_backend.hpp"
 
 #include <gecode/int.hh>
@@ -58,16 +58,16 @@
 
 using namespace Gecode;
 
-// Alphabet Σ = {O=0, P=1, R=2, W=3} — identique à SSPShiftProblem/SSPCLDProblem.
+// Alphabet Σ = {O=0, P=1, R=2, W=3} — identique à SSPShiftProblem/SSPDLDProblem.
 static constexpr int SSP_BAB_SIGMA_SIZE = 4;
 static constexpr int SSP_BAB_SIGMA_W    = 3;
 
 // ── Mode de calcul de la borne aux nœuds (même sémantique que pour MKP) ──────
-// V1LD  : ζ_i exact via CP-SAT à chaque more() → borne serrée, TRÈS lent (NP-difficile).
+// SLD  : ζ_i exact via CP-SAT à chaque more() → borne serrée, TRÈS lent (NP-difficile).
 //         Praticable uniquement sur de petites instances (E, T, N faibles).
-// V1CLD : ζ_{i,j} glouton O(E·T·Q) → borne plus lâche, rapide.
-// GNN   : un seul forward pass du GNN v1CLD entraîné (gnn_v1cld_native.hpp),
-//         PAS d'itération/warm-start contrairement à V1CLD (borne one-shot,
+// DLD : ζ_{i,j} glouton O(E·T·Q) → borne plus lâche, rapide.
+// GNN   : un seul forward pass du GNN DLD entraîné (gnn_dld_native.hpp),
+//         PAS d'itération/warm-start contrairement à DLD (borne one-shot,
 //         même convention que le mode GNN de MKP, cf. gecode_bab.hpp mkp) —
 //         partout dans l'arbre, y compris après le branchement complet de x
 //         (zone jamais vue à l'entraînement, cf. discussion 2026-08-18 :
@@ -78,16 +78,16 @@ static constexpr int SSP_BAB_SIGMA_W    = 3;
 //         les appels suivants se comportent comme REF (aucune borne
 //         recalculée/postée). Mirroir exact de BoundMode::GNN_ROOT côté MKP
 //         (gecode_bab.hpp) — sert à obtenir la borne GNN "root-only" comparée
-//         à la trace de convergence du sous-gradient V1CLD (cf.
+//         à la trace de convergence du sous-gradient DLD (cf.
 //         gnn_compare_bound ci-dessous, expérience GNN-vs-sous-gradient t*
 //         portée de CCMKP vers CCSSP).
 // REF   : squelette nu (même mirroir que BoundMode::REF côté MKP, cf.
 //         gecode_bab.hpp mkp) — même classe, même heuristique de branchement,
 //         même moteur, même amorçage d'incumbent, mais more() ne reconstruit
 //         AUCUN masque et ne calcule/poste AUCUNE borne. Sert de référence
-//         pour isoler l'effet de la borne seule (écart REF vs GNN/V1CLD) de
+//         pour isoler l'effet de la borne seule (écart REF vs GNN/DLD) de
 //         celui du branchement/moteur (écart Gecode de base vs REF).
-enum class SSPBoundMode { V1LD, V1CLD, GNN, GNN_ROOT, REF };
+enum class SSPBoundMode { SLD, DLD, GNN, GNN_ROOT, REF };
 
 // ── Heuristique de branchement du BoundBrancher ──────────────────────────────
 // RATIO    : ordre data->branch_order (score demande/salaire), valeur W en
@@ -143,7 +143,7 @@ struct SSPSharedData {
     // s'accorder avec le brise-symétrie lex (x[e] ≤lex x[e+1]).
     std::vector<int> branch_order;   // indices e*T+t, taille E*T
 
-    SSPBoundMode      bound_mode      = SSPBoundMode::V1LD;
+    SSPBoundMode      bound_mode      = SSPBoundMode::SLD;
     SSPBranchHeuristic branch_heuristic = SSPBranchHeuristic::SIZE_MIN;
 
     // Mode GNN/GNN_ROOT (bound_mode == SSPBoundMode::GNN ou GNN_ROOT) —
@@ -156,18 +156,18 @@ struct SSPSharedData {
     double rel_tol    = 1e-4;
     int    tol_window = 30;
 
-    // gnn_compare_bound : arrêt anticipé du sous-gradient V1CLD À LA RACINE
+    // gnn_compare_bound : arrêt anticipé du sous-gradient DLD À LA RACINE
     // (is_first) dès que la borne courante (convention coût réel, même
     // échelle que root_bound_value) atteint cette valeur — typiquement la
     // borne déjà obtenue par un forward GNN_ROOT sur la même instance, passée
     // via la variable d'env GNN_COMPARE_BOUND (lue dans solve_gecode_bab_ssp,
     // gecode_bab_ssp.cpp). 1e18 (défaut) = désactivé (jamais atteint,
     // comportement historique inchangé). Ignoré aux nœuds suivants (T_node) —
-    // la comparaison au GNN ne concerne que la racine, et ignoré en V1LD (pas
-    // porté, cf. portée de l'expérience GNN-vs-sous-gradient t* : V1CLD
+    // la comparaison au GNN ne concerne que la racine, et ignoré en SLD (pas
+    // porté, cf. portée de l'expérience GNN-vs-sous-gradient t* : DLD
     // uniquement côté SSP). Mirroir de MKPSharedData::gnn_compare_bound
     // (gecode_bab.hpp mkp) — MAIS conversion différente vers l'échelle
-    // interne à solve_v1cld : SSP maximise en interne cost^T x = −salaire
+    // interne à solve_dld : SSP maximise en interne cost^T x = −salaire
     // (cf. docstring de fichier ci-dessus, "Convention de signe"), donc
     // target_bound = −gnn_compare_bound (pas gnn_compare_bound − fp comme
     // MKP, qui n'a pas cette inversion de signe et where fp est déjà
@@ -176,12 +176,12 @@ struct SSPSharedData {
 
     // Ablation : faut-il calculer/poster la borne Lagrangienne dans more()
     // (sinon on garde le même arbre/branchement — toujours l'ordre ratio —
-    // mais sans jamais appeler solve_v1ld/solve_v1cld). Isole l'effet de la
+    // mais sans jamais appeler solve_sld/solve_dld). Isole l'effet de la
     // borne, à heuristique et moteur de recherche fixés.
     bool use_lagrangian_bound = true;
 
     // Budget global (utilisé par more() pour ne pas dépasser le temps imparti
-    // au B&B avec un seul appel solve_v1ld/solve_v1cld trop long — cf. note
+    // au B&B avec un seul appel solve_sld/solve_dld trop long — cf. note
     // dans more() : le contrôle interne du sous-gradient ne vérifie le temps
     // que tous les 50 itérations, donc pour T_root/T_node < 50 ce garde-fou
     // reste imparfait, mais il borne au moins les gros T_root sur grande N).
@@ -195,20 +195,20 @@ struct SSPSharedData {
     // NaN tant qu'aucun more() n'a été exécuté (ex: use_lagrangian_bound=false).
     mutable double  root_bound_value   = std::numeric_limits<double>::quiet_NaN();
     mutable double  t_bound_total_s    = 0.0;
-    // Répartition du coût pour bound_mode==V1CLD uniquement (2026-08-20,
+    // Répartition du coût pour bound_mode==DLD uniquement (2026-08-20,
     // comparaison à la répartition GNN graph_build/forward/zeta_theta) :
-    // t_v1cld_problem_build_s = construction de SSPCLDProblemBnB par nœud
-    // (analogue de graph_build) ; t_v1cld_zeta_theta_s = temps cumulé dans
-    // l'étape B (calcul θ/ζ) de solve_v1cld, sur tous les nœuds. Le "reste"
+    // t_dld_problem_build_s = construction de SSPDLDProblemBnB par nœud
+    // (analogue de graph_build) ; t_dld_zeta_theta_s = temps cumulé dans
+    // l'étape B (calcul θ/ζ) de solve_dld, sur tous les nœuds. Le "reste"
     // (mise à jour de λ -- analogue du forward GNN) se déduit par soustraction
     // à t_bound_total_s dans l'appelant, pas stocké séparément.
-    mutable double  t_v1cld_problem_build_s = 0.0;
-    mutable double  t_v1cld_zeta_theta_s    = 0.0;
+    mutable double  t_dld_problem_build_s = 0.0;
+    mutable double  t_dld_zeta_theta_s    = 0.0;
     // Diagnostic 2026-08-20 : nombre total d'itérations (A)-(H) réellement
     // exécutées cumulé sur tous les more(), pour vérifier a posteriori si le
     // temps zeta_theta quasi nul mesuré est plausible (peu d'itérations au
     // total) ou suspect (beaucoup d'itérations pour un temps mesuré ~0).
-    mutable int64_t v1cld_iters_total       = 0;
+    mutable int64_t dld_iters_total       = 0;
     // Nombre de fois où la borne duale a réellement resserré total_cost
     // (lb_int > total_cost.min() dans more()) — permet de distinguer "borne
     // correcte mais inutile sur cette instance" de "borne qui ne se déclenche
@@ -294,7 +294,7 @@ struct SSPSharedData {
     }
 };
 
-// ── SSPSpaceBnB — espace de recherche Gecode pour le CCSSP + borne v1LD/v1CLD ─
+// ── SSPSpaceBnB — espace de recherche Gecode pour le CCSSP + borne SLD/DLD ─
 
 class SSPSpaceBnB : public IntMinimizeSpace {
 public:
@@ -307,8 +307,8 @@ public:
 
     // Multiplicateurs Lagrangiens — taille fixe (ne rétrécit jamais, contrairement
     // à MKP) puisqu'on masque plutôt que de rétrécir l'instance résiduelle.
-    Vec2d lambda_v1ld;    // (N, E*T*4)   — mode V1LD
-    Vec3d lambda_v1cld;   // (N, T, E*T*4) — mode V1CLD  (m = T contraintes)
+    Vec2d lambda_sld;    // (N, E*T*4)   — mode SLD
+    Vec3d lambda_dld;   // (N, T, E*T*4) — mode DLD  (m = T contraintes)
     bool  lambda_warmed = false;
 
     // ── BoundBrancher — brancher custom sur x_flat, déclenche more() ─────────
@@ -422,9 +422,9 @@ public:
           z         (*this, d->N, 0, 1),
           total_cost(*this, 0, d->sal_ub),
           data(d),
-          lambda_v1ld (d->bound_mode == SSPBoundMode::V1LD
+          lambda_sld (d->bound_mode == SSPBoundMode::SLD
                        ? Vec2d(d->N, Vec1d(d->E * d->T * SSP_BAB_SIGMA_SIZE, 0.0)) : Vec2d{}),
-          lambda_v1cld(d->bound_mode == SSPBoundMode::V1CLD
+          lambda_dld(d->bound_mode == SSPBoundMode::DLD
                        ? Vec3d(d->N, Vec2d(d->T, Vec1d(d->E * d->T * SSP_BAB_SIGMA_SIZE, 0.0)))
                        : Vec3d{})
     {
@@ -490,8 +490,8 @@ public:
     // ── Constructeur de clonage ────────────────────────────────────────────────
     SSPSpaceBnB(SSPSpaceBnB& s)
         : IntMinimizeSpace(s), data(s.data),
-          lambda_v1ld(s.lambda_v1ld),
-          lambda_v1cld(s.lambda_v1cld),
+          lambda_sld(s.lambda_sld),
+          lambda_dld(s.lambda_dld),
           lambda_warmed(s.lambda_warmed)
     {
         x_flat    .update(*this, s.x_flat);
@@ -503,7 +503,7 @@ public:
     Space*  copy() override { return new SSPSpaceBnB(*this); }
     IntVar  cost() const override { return total_cost; }
 
-    // ── more() — borne v1LD/v1CLD sur le sous-problème résiduel (masqué) ──────
+    // ── more() — borne SLD/DLD sur le sous-problème résiduel (masqué) ──────
     void more() {
         // Mode REF : squelette nu, cf. docstring SSPBoundMode::REF ci-dessus —
         // court-circuit AVANT le scan des variables (Étape 1), qui n'a
@@ -532,7 +532,7 @@ public:
         // curr_cost/free_count : sous-produits gratuits du même scan O(E·T) —
         // nécessaires seulement en mode GNN (build_graph_cpp attend curr_cost,
         // depth ; cf. discussion 2026-08-18 -- aucun coût supplémentaire par
-        // rapport au scan déjà fait pour V1LD/V1CLD).
+        // rapport au scan déjà fait pour SLD/DLD).
         double curr_cost   = 0.0;
         int    free_count  = 0;
         for (int e = 0; e < E; ++e)
@@ -556,12 +556,12 @@ public:
         using Clock = std::chrono::steady_clock;
         auto bound_t0 = Clock::now();
 
-        // Budget restant à passer à solve_v1ld/solve_v1cld : borne le pire cas
+        // Budget restant à passer à solve_sld/solve_dld : borne le pire cas
         // d'un more() individuel au temps global restant. Garde-fou imparfait
-        // (solve_v1ld/v1cld ne revérifient le temps que tous les 50 itérations,
+        // (solve_sld/dld ne revérifient le temps que tous les 50 itérations,
         // donc pour T_root/T_node < 50 le contrôle n'agit qu'entre nœuds, pas
         // en cours d'appel) — d'où l'intérêt de garder T_root/T_node petits en
-        // mode V1LD (ζ = CP-SAT à chaque itération, déjà coûteux en soi).
+        // mode SLD (ζ = CP-SAT à chaque itération, déjà coûteux en soi).
         double remaining = -1.0;
         if (data->time_lim > 0.0) {
             double elapsed_global =
@@ -571,21 +571,21 @@ public:
 
         double dual_val;  // convention max(−salaire)
 
-        if (data->bound_mode == SSPBoundMode::V1LD) {
+        if (data->bound_mode == SSPBoundMode::SLD) {
             SSPProblemBnB prob(data->transitions, data->accepting, data->initial,
                                 data->salary_rounded, data->demand, data->p, data->epsilon,
                                 E, mask);
-            V1LDResult res = solve_v1ld(prob, T_iters, 0, false, remaining,
+            SLDResult res = solve_sld(prob, T_iters, 0, false, remaining,
                                         data->rel_tol, data->tol_window, -1e18,
-                                        lambda_v1ld);
-            lambda_v1ld = std::move(res.lambda_star);
-            dual_val    = res.v1LD_star;
-        } else if (data->bound_mode == SSPBoundMode::V1CLD) {
+                                        lambda_sld);
+            lambda_sld = std::move(res.lambda_star);
+            dual_val    = res.SLD_star;
+        } else if (data->bound_mode == SSPBoundMode::DLD) {
             auto t_pb0 = Clock::now();
-            SSPCLDProblemBnB prob(data->transitions, data->accepting, data->initial,
+            SSPDLDProblemBnB prob(data->transitions, data->accepting, data->initial,
                                    data->salary_rounded, data->demand, data->p, data->epsilon,
                                    E, mask);
-            data->t_v1cld_problem_build_s +=
+            data->t_dld_problem_build_s +=
                 std::chrono::duration<double>(Clock::now() - t_pb0).count();
             // log_interval=1 UNIQUEMENT à la racine (is_first) : res.convergence
             // porte alors la trace complète L1(t) pour t=0..T_root-1, dumpée
@@ -595,7 +595,7 @@ public:
             // de production inchangé).
             // target_bound : cf. doc SSPSharedData::gnn_compare_bound —
             // uniquement à la racine (is_first). Conversion vers la
-            // convention interne max(−salaire) de solve_v1cld : PAS une
+            // convention interne max(−salaire) de solve_dld : PAS une
             // simple différence comme côté MKP (pas de terme fp séparé ici,
             // le masque encode déjà tout le sous-problème résiduel), mais une
             // inversion de signe (cf. docstring de fichier ci-dessus,
@@ -605,13 +605,13 @@ public:
             double target_bound = (is_first && data->gnn_compare_bound < 1e17)
                                        ? -data->gnn_compare_bound
                                        : 1e18;
-            V1CLDResult res = solve_v1cld(prob, T_iters, is_first ? 1 : 0, false, remaining,
+            DLDResult res = solve_dld(prob, T_iters, is_first ? 1 : 0, false, remaining,
                                           data->rel_tol, data->tol_window, -1e18,
-                                          lambda_v1cld, target_bound);
-            data->t_v1cld_zeta_theta_s += res.t_zeta_theta_s;
-            data->v1cld_iters_total    += res.iterations_run;
-            lambda_v1cld = std::move(res.lambda_star);
-            dual_val     = res.v1CLD_star;
+                                          lambda_dld, target_bound);
+            data->t_dld_zeta_theta_s += res.t_zeta_theta_s;
+            data->dld_iters_total    += res.iterations_run;
+            lambda_dld = std::move(res.lambda_star);
+            dual_val     = res.DLD_star;
 
             // Trace opt-in (ROOT_SUBGRAD_TRACE=1) : best_upper(t) = meilleur
             // (min) L1 vu jusqu'à l'itération t, reconverti en convention
@@ -624,7 +624,7 @@ public:
                 double running_best = 1e18;
                 for (size_t t = 0; t < res.convergence.size(); ++t) {
                     running_best = std::min(running_best, res.convergence[t]);
-                    std::fprintf(stderr, "SUBGRAD_TRACE,v1cld,%zu,%.6f\n",
+                    std::fprintf(stderr, "SUBGRAD_TRACE,dld,%zu,%.6f\n",
                                  t + 1, -running_best);
                 }
             }
@@ -684,14 +684,14 @@ public:
         // Élargi (2026-07-09) : déclenche aussi sur lb_int > total_cost.max()
         // (= fails_from_bound, contradiction avec le domaine COURANT, rétréci
         // par l'incumbent Gecode) — pas seulement le plafond universel sal_ub.
-        // Nécessaire pour capturer des runs (ex: v1LD, T_root/T_node petits)
+        // Nécessaire pour capturer des runs (ex: SLD, T_root/T_node petits)
         // où le sous-gradient diverge moins fort et ne dépasse jamais sal_ub,
         // mais où la borne est quand même invalide localement.
         const bool exceeds_sal_ub  = lb_int > data->sal_ub;
         const bool exceeds_cur_max = lb_int > total_cost.max();
         if (getenv("SSP_DEBUG_BOUND") && (exceeds_sal_ub || exceeds_cur_max)) {
             std::cerr << "*** BORNE INVALIDE ["
-                      << (data->bound_mode == SSPBoundMode::V1LD ? "V1LD" : "V1CLD")
+                      << (data->bound_mode == SSPBoundMode::SLD ? "SLD" : "DLD")
                       << (exceeds_sal_ub ? "/sal_ub" : "/cur_max")
                       << "] : lb_int=" << lb_int
                       << " > sal_ub=" << data->sal_ub
@@ -706,15 +706,15 @@ public:
                     for (int t = 0; t < T; ++t) f << mask[e][t] << " ";
                     f << "\n";
                 }
-                f << "lambda_mode " << (data->bound_mode == SSPBoundMode::V1LD ? "ld" : "cld") << "\n";
-                if (data->bound_mode == SSPBoundMode::V1LD) {
-                    f << "lambda_v1ld " << lambda_v1ld.size() << " " << (lambda_v1ld.empty() ? 0 : lambda_v1ld[0].size()) << "\n";
-                    for (auto& row : lambda_v1ld) { for (double v : row) f << v << " "; f << "\n"; }
+                f << "lambda_mode " << (data->bound_mode == SSPBoundMode::SLD ? "ld" : "dld") << "\n";
+                if (data->bound_mode == SSPBoundMode::SLD) {
+                    f << "lambda_sld " << lambda_sld.size() << " " << (lambda_sld.empty() ? 0 : lambda_sld[0].size()) << "\n";
+                    for (auto& row : lambda_sld) { for (double v : row) f << v << " "; f << "\n"; }
                 } else {
-                    f << "lambda_v1cld " << lambda_v1cld.size() << " "
-                      << (lambda_v1cld.empty() ? 0 : lambda_v1cld[0].size()) << " "
-                      << (lambda_v1cld.empty() || lambda_v1cld[0].empty() ? 0 : lambda_v1cld[0][0].size()) << "\n";
-                    for (auto& mat : lambda_v1cld)
+                    f << "lambda_dld " << lambda_dld.size() << " "
+                      << (lambda_dld.empty() ? 0 : lambda_dld[0].size()) << " "
+                      << (lambda_dld.empty() || lambda_dld[0].empty() ? 0 : lambda_dld[0][0].size()) << "\n";
+                    for (auto& mat : lambda_dld)
                         for (auto& row : mat) { for (double v : row) f << v << " "; f << "\n"; }
                 }
             }
@@ -740,11 +740,11 @@ struct GecodeSSPBabResult {
     double      root_bound_value;   // NaN si use_lagrangian_bound=false (pas de borne)
     double      t_bound_total_s;
     double      t_bab_pure_s;      // = solve_time_s - t_bound_total_s
-    // Répartition du coût, mode V1CLD uniquement (0.0 sinon) -- cf.
-    // SSPSharedData::t_v1cld_problem_build_s / t_v1cld_zeta_theta_s.
-    double      t_v1cld_problem_build_s;
-    double      t_v1cld_zeta_theta_s;
-    int64_t     v1cld_iters_total;
+    // Répartition du coût, mode DLD uniquement (0.0 sinon) -- cf.
+    // SSPSharedData::t_dld_problem_build_s / t_dld_zeta_theta_s.
+    double      t_dld_problem_build_s;
+    double      t_dld_zeta_theta_s;
+    int64_t     dld_iters_total;
     int64_t     nodes;
     int64_t     fails;
     int64_t     depth;
@@ -763,7 +763,7 @@ struct GecodeSSPBabResult {
 //     SANS borne Lagrangienne — sert de référence "base" (comme
 //     bab_mkp_gecode_base pour MKP, mais avec notre heuristique plutôt que
 //     celle générique de Gecode, pour comparer à heuristique fixée).
-//   - use_lagrangian_bound=true, bound_mode=V1LD (défaut, comme pour MKP) :
+//   - use_lagrangian_bound=true, bound_mode=SLD (défaut, comme pour MKP) :
 //     le vrai B&B avec borne Lagrangienne à chaque nœud.
 GecodeSSPBabResult solve_gecode_bab_ssp(
     int E, int T, int N, double epsilon,
@@ -773,7 +773,7 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     double       time_lim             = 300.0,
     int          T_root               = 200,
     int          T_node               = 30,
-    SSPBoundMode bound_mode           = SSPBoundMode::V1LD,
+    SSPBoundMode bound_mode           = SSPBoundMode::SLD,
     double       rel_tol              = 1e-4,
     int          tol_window           = 30,
     bool         use_lagrangian_bound = true,

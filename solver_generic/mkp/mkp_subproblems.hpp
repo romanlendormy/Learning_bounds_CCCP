@@ -1,6 +1,6 @@
 #pragma once
 /*
- * mkp_subproblems.hpp — Sous-problèmes MKP utilisés par MKPCLDProblem.
+ * mkp_subproblems.hpp — Sous-problèmes MKP utilisés par MKPDLDProblem.
  *
  * solve_theta_i_max      : O(n)                — max cost^T x, x ∈ {0,1}^n
  * solve_zeta_i_exact_bb  : B&B exact            — 0/1 knapsack 1-contrainte, borne de Dantzig

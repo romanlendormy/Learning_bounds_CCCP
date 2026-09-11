@@ -3,7 +3,7 @@
  *
  * Charge une instance texte (cf. ssp_loader.hpp) et la résout avec Gecode
  * base (CP pur, size_min natif) sous un budget de temps donné. N'exécute
- * PAS v1CLD/v1LD (trop coûteux pour balayer beaucoup d'instances) — sert
+ * PAS DLD/SLD (trop coûteux pour balayer beaucoup d'instances) — sert
  * uniquement à classer une instance : INFEASIBLE / trivial / dur / TIMEOUT.
  *
  * Usage :

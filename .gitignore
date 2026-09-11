@@ -36,7 +36,7 @@ solver_swann_darius.cpp
 data/knapsack/datasets-song-github
 data/knapsack/datasets-pisinger/
 data/knapsack/pisinger
-data/train_v1cld
+data/train_dld
 data/ssp
 data/ssp_collect/
 data/ssp_generate/
@@ -59,7 +59,7 @@ logs/
 
 results/
 
-# Exception : campagne MKP racine V1LD vs REF sur Trillium (test_paper_trillium/),
+# Exception : campagne MKP racine SLD vs REF sur Trillium (test_paper_trillium/),
 # résultats faisant foi pour le papier -- versionnés contrairement aux autres
 # dossiers results/ (recréables/intermédiaires).
 !/test_paper_trillium/results/
@@ -78,7 +78,7 @@ gnn/*.png
 # Checkpoints GNN (volumineux, recréables via les scripts d'entraînement)
 gnn/runs/
 gnn_sd_edit/runs/
-gnn_sd_edit/runs_v1cld/
+gnn_sd_edit/runs_dld/
 gnn_ssp/runs/
 
 # Résultats de benchmark (recréables via les scripts run_bench_*)
@@ -88,11 +88,11 @@ solver_generic/run_e3t8.csv
 
 # Cache d'export TorchScript (régénéré automatiquement au premier run côté
 # C++, cf. ensure_scripted_batched_export()/ensure_scripted_export())
-gnn_sd_edit/runs_v1cld/*.scripted_batched.pt
-gnn_sd_edit/runs_v1cld/*.v1cld_scripted_batched.pt
-gnn_sd_edit/runs_v1cld/*.scripted.pt
+gnn_sd_edit/runs_dld/*.scripted_batched.pt
+gnn_sd_edit/runs_dld/*.dld_scripted_batched.pt
+gnn_sd_edit/runs_dld/*.scripted.pt
 
 # Instances de test volumineuses (recréables via generate_test_instances.py,
 # génération déterministe : SEEDS=range(43,53))
 test_paper_trillium/instance_*.txt
-test_paper_trillium_v1cld/instance_*.txt
+test_paper_trillium_dld/instance_*.txt

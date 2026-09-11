@@ -3,7 +3,7 @@
 parse_gnn_vs_subgrad.py — Post-traitement de run_gnn_vs_subgrad_n15.sh.
 
 Pour chaque instance (n=15, N in {100,500,1000}, seed in 43..52, formulation
-in {v1ld, v1cld}) :
+in {sld, dld}) :
   - lit la borne GNN root-only (logs/gnn_root_<tag>.log, ligne "Borne UB à la
     racine").
   - lit la trace de convergence du sous-gradient (logs/subgrad_<tag>.stderr.log,
@@ -35,8 +35,8 @@ Usage :
     seed), colonnes n,formulation,N,seed,optimal,gnn_bound,gap_gnn_pct,
     subgrad_bound,gap_subgrad_pct,t_star,t_max,censored.
     --ref-dir DIR : répertoire contenant les résultats REF (défaut
-    test_paper/mkp/trillium/v1ld/results, Trillium — 105/120 instances, cf.
-    commit "Verse les resultats MKP V1LD vs REF de la campagne Trillium")
+    test_paper/mkp/trillium/sld/results, Trillium — 105/120 instances, cf.
+    commit "Verse les resultats MKP SLD vs REF de la campagne Trillium")
     utilisés comme source de la valeur
     optimale certifiée (ref_n<n>_N<N>_seed<seed>.csv, colonne "objective",
     UNIQUEMENT si status=="OPTIMAL" — sinon pas de gap calculable pour cette
@@ -50,7 +50,7 @@ from pathlib import Path
 
 N_VALUES = [100, 500, 1000]
 SEEDS = list(range(43, 53))
-FORMULATIONS = ["v1ld", "v1cld"]
+FORMULATIONS = ["sld", "dld"]
 
 ROOT_BOUND_RE = re.compile(r"Borne UB à la racine\s*:\s*([\-0-9.]+)")
 OPTIMAL_RE = re.compile(r"Valeur optimale\s*:\s*([\-0-9.]+)")
@@ -134,7 +134,7 @@ def main():
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
     csv_path = _opt_arg("csv")
     detail_csv_path = _opt_arg("detail-csv")
-    default_ref_dir = Path(__file__).resolve().parents[1] / "v1ld" / "results"
+    default_ref_dir = Path(__file__).resolve().parents[1] / "sld" / "results"
     ref_dir = Path(_opt_arg("ref-dir", str(default_ref_dir)))
 
     scratch_dir = Path(positional[0] if len(positional) > 0 else "/scratch/romanlen/gnn_vs_subgrad_n15")

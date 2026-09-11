@@ -9,7 +9,7 @@
  *     T <int>
  *     N <int>
  *     EPSILON <double>
- *     INTERCHANGEABLE <0|1>   (réservé — non utilisé par le solveur v1LD)
+ *     INTERCHANGEABLE <0|1>   (réservé — non utilisé par le solveur SLD)
  *
  *   automaton.txt
  *     NUM_STATES <int>

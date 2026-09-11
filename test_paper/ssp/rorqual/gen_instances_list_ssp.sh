@@ -2,7 +2,7 @@
 # gen_instances_list_ssp.sh — (re)génère test_paper/ssp/rorqual/instances_list.txt
 # à partir des dossiers ssp/E{E}_T{T}_N{N}/rep{0..9} déjà présents sur disque.
 # Format d'une ligne : "E T N rep chemin_relatif" (cf. run_ref_array_ssp.sh /
-# run_gnn_batched_array_ssp.sh, même convention que test_paper/mkp/trillium/v1ld/instances_list.txt
+# run_gnn_batched_array_ssp.sh, même convention que test_paper/mkp/trillium/sld/instances_list.txt
 # côté MKP).
 #
 # Usage :

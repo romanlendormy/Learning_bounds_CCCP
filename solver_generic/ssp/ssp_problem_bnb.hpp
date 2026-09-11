@@ -1,7 +1,7 @@
 #pragma once
 /*
  * ssp_problem_bnb.hpp — SSPProblemBnB : variante masquée de SSPShiftProblem
- *                        pour la borne v1LD aux nœuds d'un B&B Gecode.
+ *                        pour la borne SLD aux nœuds d'un B&B Gecode.
  *
  * À un nœud du B&B, certaines variables x[e,t] sont déjà fixées par les
  * décisions de branchement précédentes. Au lieu de rétrécir l'instance

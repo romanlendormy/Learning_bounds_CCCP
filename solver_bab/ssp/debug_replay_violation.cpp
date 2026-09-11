@@ -8,7 +8,7 @@
  * Usage : debug_replay_violation <dir_instance> <dump_file>
  */
 #include "ssp_loader.hpp"
-#include "../../solver_generic/ssp/ssp_cld_problem_bnb.hpp"
+#include "../../solver_generic/ssp/ssp_dld_problem_bnb.hpp"
 #include "../../solver_generic/ssp/ssp_problem_bnb.hpp"
 
 #include <algorithm>
@@ -134,8 +134,8 @@ int main(int argc, char** argv) {
         std::istringstream iss(line);
         for (int t = 0; t < T; ++t) iss >> mask[e][t];
     }
-    std::getline(f, line);  // "lambda_mode cld"
-    std::getline(f, line);  // "lambda_v1cld N m d"
+    std::getline(f, line);  // "lambda_mode dld"
+    std::getline(f, line);  // "lambda_dld N m d"
     std::istringstream hdr(line);
     std::string tag; int NN, mm, dd;
     hdr >> tag >> NN >> mm >> dd;
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
             for (int k = 0; k < d; ++k)
                 Lambda_sum[k] += lam[i][j][k];
 
-    SSPCLDProblemBnB prob(inst.transitions, inst.accepting, inst.initial,
+    SSPDLDProblemBnB prob(inst.transitions, inst.accepting, inst.initial,
                           inst.salary, inst.demand, inst.p, inst.epsilon, E, mask);
 
     int n_checked = 0, n_mismatch = 0;
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
               << "  (" << n_negative_raw << " paires negatives sur " << (NN * mm) << ")\n";
 
     // ── Recalcul de L1 a partir de CES theta/zeta (valides exacts) ───────────
-    // Reproduit exactement la formule de v1cld_solver.cpp (A-D), pour voir si
+    // Reproduit exactement la formule de dld_solver.cpp (A-D), pour voir si
     // le bug est dans la formule d'agregation plutot que dans l'oracle.
     Vec1d effective_delta(NN, 0.0);
     for (int i = 0; i < NN; ++i) {
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
             L1 += inst.p[i] * inv_m * theta_vals[i][j];
 
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "\nRecalcul manuel (formule v1cld_solver.cpp, mais theta/zeta 100% verifies exacts) :\n";
+    std::cout << "\nRecalcul manuel (formule dld_solver.cpp, mais theta/zeta 100% verifies exacts) :\n";
     std::cout << "  knapsack_val = " << knapsack_val << "\n";
     std::cout << "  L1           = " << L1 << "\n";
     std::cout << "  lb_salary    = " << -L1 << "\n";
@@ -368,13 +368,13 @@ int main(int argc, char** argv) {
         // dualite faible theta_i(0) <= mean_j theta2_ij(lambda) et
         // zeta_i(0) <= mean_j zeta2_ij(lambda), pour lambda=0 EXACT (pas de
         // correction du tout) -- theta_i(0) = solve_theta(*, c) (j ignore),
-        // zeta_i(0) = VRAI joint (les 8 contraintes ensemble, solveur v1LD/
+        // zeta_i(0) = VRAI joint (les 8 contraintes ensemble, solveur SLD/
         // CP-SAT), pour chaque scenario SELECTIONNE. Si l'inegalite est
         // fausse pour un i, la preuve de dualite faible a un trou reel ici,
         // pas juste un probleme de magnitude de lambda.
         std::cout << "\n=== Verification directe theta_i(0) / zeta_i(0) (lambda=0) ===\n";
         {
-            SSPProblemBnB prob_v1ld(inst.transitions, inst.accepting, inst.initial,
+            SSPProblemBnB prob_sld(inst.transitions, inst.accepting, inst.initial,
                                      inst.salary, inst.demand, inst.p, inst.epsilon, E, mask);
             auto [theta0, xt0] = prob.solve_theta(0, c);  // j ignore ; meme pour tout i
             std::cout << "theta_i(0) = " << theta0 << "  (identique pour tout i)\n";
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
                 double mean_theta2 = 0.0, mean_zeta2 = 0.0;
                 for (int j = 0; j < mm; ++j) { mean_theta2 += theta2[idx][j]; mean_zeta2 += zeta2[idx][j]; }
                 mean_theta2 *= inv_m; mean_zeta2 *= inv_m;
-                auto [zeta0, xz0] = prob_v1ld.solve_zeta(idx, c);  // vrai joint, 8 contraintes ensemble
+                auto [zeta0, xz0] = prob_sld.solve_zeta(idx, c);  // vrai joint, 8 contraintes ensemble
                 bool ok_theta = (theta0 <= mean_theta2 + 1e-6);
                 bool ok_zeta  = (zeta0  <= mean_zeta2  + 1e-6);
                 std::cout << "  i=" << idx
@@ -397,7 +397,7 @@ int main(int argc, char** argv) {
     }
 
     // ── Verification force brute du knapsack glouton (min_z) ─────────────────
-    // knapsack_min (v1cld_solver.cpp) trie par effective_delta croissant et
+    // knapsack_min (dld_solver.cpp) trie par effective_delta croissant et
     // s'arrete des que le cumul de p atteint 1-eps — optimal pour poids p_i
     // UNIFORMES (cardinalite fixee), pas garanti optimal en general (0/1
     // covering knapsack, NP-difficile). N<=24 ici : enumeration exhaustive

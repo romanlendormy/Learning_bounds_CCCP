@@ -155,7 +155,7 @@ static void solve_one(
 // lieu du minimum de m relaxations séparées) — port fidèle de
 // solver_generic/mkp/mkp_surrogate_bound.hpp dans le style tableaux plats de
 // ce fichier. ζ_i retourne EXACTEMENT la même valeur que solve_one (seule la
-// preuve d'optimalité interne diffère) — validé dans le vrai B&B V1LD
+// preuve d'optimalité interne diffère) — validé dans le vrai B&B SLD
 // séquentiel (gecode_bab.hpp, MKPProblemBnBSurrogate) : mêmes nœuds/objectif,
 // ×2.25 plus rapide (n=20/N=100).
 //

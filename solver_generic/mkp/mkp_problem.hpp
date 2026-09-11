@@ -1,6 +1,6 @@
 #pragma once
 /*
- * mkp_problem.hpp — V1LDProblem pour le MKP chance-contraint.
+ * mkp_problem.hpp — SLDProblem pour le MKP chance-contraint.
  *
  * x ∈ {0,1}^n,  c déterministe,  A_i x ≤ b_i stochastique.
  *
@@ -9,9 +9,9 @@
  *               (copie de solve_zeta_i_mkp_bb dans mkp_subproblems.hpp)
  */
 
-#include "v1ld_base.hpp"
+#include "sld_base.hpp"
 
-class MKPProblem : public V1LDProblem {
+class MKPProblem : public SLDProblem {
 public:
     // c : (n,)   p : (N,)   A : (N, m, n)   b : (N, m)
     MKPProblem(Vec1d c, Vec1d p, Vec3d A, Vec2d b, double epsilon);

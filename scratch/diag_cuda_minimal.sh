@@ -78,5 +78,5 @@ fi
 rm -f /tmp/diag_cuda_cpp_$$ /tmp/diag_cuda_cpp_$$.cpp
 
 echo
-echo "--- 5) le binaire bab_mkp_gecode lui-meme, mode le plus simple possible (v1ld, pas de gnn) ---"
-solver_bab/build/bab_mkp_gecode test_paper/instance_n15_m5_N100_seed43.txt 0.10 10 60 0 20 v1ld 2>&1 | tail -20
+echo "--- 5) le binaire bab_mkp_gecode lui-meme, mode le plus simple possible (sld, pas de gnn) ---"
+solver_bab/build/bab_mkp_gecode test_paper/instance_n15_m5_N100_seed43.txt 0.10 10 60 0 20 sld 2>&1 | tail -20

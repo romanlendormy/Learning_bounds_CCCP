@@ -1,9 +1,9 @@
 /*
- * ssp_problem.cpp — SSPShiftProblem : oracles v1LD pour le SSP multi-employés.
+ * ssp_problem.cpp — SSPShiftProblem : oracles SLD pour le SSP multi-employés.
  *
  * Chaîne mathématique
  * -------------------
- * v1LD dualise la contrainte de quantile (un multiplicateur λ_i par scénario).
+ * SLD dualise la contrainte de quantile (un multiplicateur λ_i par scénario).
  * Le Lagrangien L1(λ) = Σ_i p_i θ_i − min_y Σ p_i δ_i y_i  s.c.  Σ p_i y_i ≥ 1−ε.
  *
  * θ_i(λ) = max_{x ∈ BASE} cost_i^T x      — domaine de base (automate, aucune couverture)
@@ -17,7 +17,7 @@
  *
  * Pourquoi ζ doit être exact :
  *   La couverture Σ_e x[e,t,W] ≥ d[t,i] couple les E employés → NP-difficile (E>1).
- *   Une solution approchée rendrait la borne v1LD invalide (L1 ne serait plus une
+ *   Une solution approchée rendrait la borne SLD invalide (L1 ne serait plus une
  *   borne supérieure) et casserait la correction d'un B&B downstream.
  *   On utilise donc OR-Tools CP-SAT qui garantit l'optimalité.
  *
@@ -157,7 +157,7 @@ SSPShiftProblem::dp_one_employee(int e, const Vec1d& cost, const Vec1i* mask_row
     // séquence valide de longueur T_ pour cet employé — sous-problème
     // réellement infaisable (pas juste "difficile"). Renvoyer NEG_INF
     // (plutôt qu'ignorer l'automate/le masque comme avant) : toute autre
-    // valeur romprait l'exactitude requise par la borne v1LD, cf.
+    // valeur romprait l'exactitude requise par la borne SLD, cf.
     // debug_verify_oracle. Le vecteur d'actions reste de taille T_ (valeurs
     // arbitraires, jamais consommées puisque la valeur -inf exclut cet
     // employé de toute sélection gloutonne en aval).

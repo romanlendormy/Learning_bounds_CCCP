@@ -1,6 +1,6 @@
 #!/bin/bash
-# run_train_scaled_sd_edit_rorqual.sh — Entraînement GNN V1LD "sd_edit" (arêtes
-# inter-scénarios en étoile, cf. gnn_sd_edit/train_v1LD_sd_edit.py) sur ~10 000
+# run_train_scaled_sd_edit_rorqual.sh — Entraînement GNN SLD "sd_edit" (arêtes
+# inter-scénarios en étoile, cf. gnn_sd_edit/train_SLD_sd_edit.py) sur ~10 000
 # graphes n=10/20, N=20/50/100 (data/train_base_s10) — même répartition
 # train/eval que run_train_scaled_rorqual.sh (homogène), pour comparaison directe.
 #
@@ -49,7 +49,7 @@ RESERVOIR_K="${RESERVOIR_K:-2}"
 N_SCENS="${N_SCENS:-20 50 100}"
 N_LIST="${N_LIST:-10 20}"
 
-# Architecture (tête h_item_k+h_scen_i+g_pool, cf. train_v1LD_sd_edit.py::GNN)
+# Architecture (tête h_item_k+h_scen_i+g_pool, cf. train_SLD_sd_edit.py::GNN)
 USE_MAX_POOL="${USE_MAX_POOL:-1}"
 # Scheduler LR :
 #   LR_WARMUP_EP>0  → LinearWarmup+CosineDecay (recommandé, pas de restarts)

@@ -12,7 +12,7 @@
 # --mem=120G est le maximum raisonnable sur les nœuds H100 de Rorqual
 # (512000MB / 4 GPU ≈ 128G par GPU dédié), pas les 187.5GB du papier.
 #
-# Binaire : test_gnn_v1cld_bab (mode "ref"), PAS bench_ssp_bab_file --
+# Binaire : test_gnn_dld_bab (mode "ref"), PAS bench_ssp_bab_file --
 # même famille de binaire "[test] ..." que le mode gnn_batched (format de
 # sortie unique, un seul parseur), et "ref" y est un squelette nu explicite
 # (aucune borne, more() court-circuite), cf. docstring du fichier source.
@@ -64,7 +64,7 @@ BAB_BUILD="$REPO/solver_bab/build_gpu_ssp"
 # répertoire de build PARTAGÉ, quand plusieurs tâches d'array démarrent en
 # même temps, se corrompent mutuellement). Le build doit être fait UNE SEULE
 # FOIS en amont (cf. build_ssp_binaries_once.sh) avant `sbatch --array`.
-BINARY="$BAB_BUILD/test_gnn_v1cld_bab"
+BINARY="$BAB_BUILD/test_gnn_dld_bab"
 if [[ ! -x "$BINARY" ]]; then
     echo "[ERREUR] binaire manquant ($BINARY) -- lancer" \
          "test_paper/ssp/rorqual/build_ssp_binaries_once.sh AVANT de soumettre ce job array." >&2
@@ -88,7 +88,7 @@ echo "======================================================================"
 
 # "|| true" : avec expected_opt=0.0 (pas de vérification voulue), le binaire
 # imprime "FAIL" et retourne 1 même sur un run OPTIMAL réussi (bug de
-# test_gnn_v1cld_bab.cpp : la branche finale ne traite pas expected_opt<=0.0
+# test_gnn_dld_bab.cpp : la branche finale ne traite pas expected_opt<=0.0
 # comme "vérification désactivée" côté code de sortie, seulement côté
 # affichage informel). Sans ce garde, "set -e" tuerait la tâche avant le
 # parsing. Le vrai statut de la résolution est lu depuis "[test] status=" par

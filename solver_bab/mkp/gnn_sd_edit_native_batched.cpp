@@ -15,7 +15,7 @@
  *     par appel query_batch(), puis dupliquée B fois avec offset (bloc-
  *     diagonal, cf. gnn_sd_edit_scriptable_batched.py).
  *
- * lagrangian_v1ld_cpp (calcul de ζ/L1(λ)) reste appelé B fois séparément
+ * lagrangian_sld_cpp (calcul de ζ/L1(λ)) reste appelé B fois séparément
  * (une fois par membre, sur ses propres A_g/b_res_g/c_g) — PAS batchable
  * simplement (dépend de données propres à chaque masque), et solve_zeta_batch
  * est déjà parallélisé OpenMP par scénario (pas le goulot ciblé par cette
@@ -257,10 +257,10 @@ void build_edges_sd_edit_cpp(int n_g, int N_z, torch::Tensor& edge_index, torch:
     edge_weight = torch::from_blob(ew.data(), {(int64_t)ew.size()}, torch::kFloat32).clone();
 }
 
-// ── lagrangian_v1ld (port MOT POUR MOT de gnn_sd_edit_native.cpp) — topologie-
+// ── lagrangian_sld (port MOT POUR MOT de gnn_sd_edit_native.cpp) — topologie-
 // agnostique, ne lit que A_g/b_res_g/c_g/lam. Dupliquée (pas partagée) —
 // même choix de duplication que les autres variantes de ce dossier. ────────
-double lagrangian_v1ld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
+double lagrangian_sld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
                            const Vec1d& c_g, int N_z, int n_g, int N, int n_fixed_z1, double epsilon,
                            bool use_surrogate_zeta)
 {
@@ -370,7 +370,7 @@ GNNSdEditNativeBatched::GNNSdEditNativeBatched(
     for (double pi : p)
         if (std::abs(pi - p_unif) > 1e-9)
             throw std::invalid_argument(
-                "GNNSdEditNativeBatched : p non-uniforme — lagrangian_v1ld suppose des "
+                "GNNSdEditNativeBatched : p non-uniforme — lagrangian_sld suppose des "
                 "scénarios équiprobables (p_i = 1/N)");
 
     if (device == "cuda") {
@@ -539,7 +539,7 @@ void GNNSdEditNativeBatched::query_batch(
     torch::Tensor h_out_2d = h_out.view({B, V});
     for (int bIdx = 0; bIdx < B; ++bIdx) {
         torch::Tensor lam_b = h_out_2d[bIdx] * feats[bIdx].c_scale / static_cast<double>(feats[bIdx].N);
-        ub_relative_out[bIdx] = lagrangian_v1ld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
+        ub_relative_out[bIdx] = lagrangian_sld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
                                                      feats[bIdx].c_g, N_z, n_g, feats[bIdx].N,
                                                      feats[bIdx].n_fixed_z1, impl_->epsilon,
                                                      impl_->use_surrogate_zeta);

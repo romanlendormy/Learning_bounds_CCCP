@@ -20,12 +20,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable
+from gnn_sd_edit.gnn_sld_scriptable import GatedGraphConvScriptable
 from gnn_ssp.gnn_ssp_scriptable_batched import GatedGraphConvSspClique
 
 
 def build_full_edges(G: int, n_groups: int):
-    """Réplique exacte de build_edges() côté C++ (gnn_v1cld_native.cpp) : clique
+    """Réplique exacte de build_edges() côté C++ (gnn_dld_native.cpp) : clique
     intra-groupe (poids 1/G) + étoile inter-groupe (poids 1.0, groupe 0 = hub)."""
     ii_src_list, ii_dst_list = [], []
     if G >= 2:

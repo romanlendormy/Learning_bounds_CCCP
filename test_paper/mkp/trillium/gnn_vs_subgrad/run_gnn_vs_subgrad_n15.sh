@@ -1,10 +1,10 @@
 #!/bin/bash
 # run_gnn_vs_subgrad_n15.sh (Trillium) — pour chaque instance de test
-# (n=15, N∈{100,500,1000}, seed∈43..52, V1LD et V1CLD), lance :
-#   (a) le forward GNN root-only ("gnn_root" pour V1LD, "gnn_root_v1cld"
-#       pour V1CLD) → root_bound_value = borne obtenue en un seul forward
+# (n=15, N∈{100,500,1000}, seed∈43..52, SLD et DLD), lance :
+#   (a) le forward GNN root-only ("gnn_root" pour SLD, "gnn_root_dld"
+#       pour DLD) → root_bound_value = borne obtenue en un seul forward
 #       GNN à la racine.
-#   (b) le sous-gradient déjà en production ("v1ld"/"v1cld"), avec
+#   (b) le sous-gradient déjà en production ("sld"/"dld"), avec
 #       ROOT_SUBGRAD_TRACE=1 et T_root=3000 (>> nb d'itérations nécessaires
 #       à la convergence par rel_tol, cf. sanity check job 821840 :
 #       convergence observée entre ~780 et ~1700 itérations sur n15/N100)
@@ -15,7 +15,7 @@
 # déduire t* = min{t : sous-gradient(t) <= GNN_root} en post-traitement
 # (parse_gnn_vs_subgrad.py), pour évaluer l'efficacité du GNN sur cette tâche.
 #
-# 60 tâches d'array : task 1-30 = V1LD (10 seeds x 3 N), task 31-60 = V1CLD.
+# 60 tâches d'array : task 1-30 = SLD (10 seeds x 3 N), task 31-60 = DLD.
 # Grille par task (1-30) : idx = task-1 ; N = [100,500,1000][idx/10] ;
 # seed = 43 + idx%10.
 #
@@ -53,26 +53,26 @@ TIME_LIMIT_S=60   # borne interne du solveur — largement suffisant pour que
 
 TASK=$((SLURM_ARRAY_TASK_ID - 1))
 if [[ $TASK -lt 30 ]]; then
-    FORMULATION="v1ld"
+    FORMULATION="sld"
     IDX=$TASK
 else
-    FORMULATION="v1cld"
+    FORMULATION="dld"
     IDX=$((TASK - 30))
 fi
 N_SCEN=${N_VALUES[$((IDX / 10))]}
 SEED=$((43 + IDX % 10))
 
-if [[ "$FORMULATION" == "v1ld" ]]; then
-    TESTDIR="$REPO/test_paper/mkp/trillium/v1ld"
+if [[ "$FORMULATION" == "sld" ]]; then
+    TESTDIR="$REPO/test_paper/mkp/trillium/sld"
     GNN_MODE="gnn_root"
-    SUBGRAD_MODE="v1ld"
+    SUBGRAD_MODE="sld"
     CKPT="$REPO/gnn_sd_edit/runs/train_scaled/ckpt_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_500ep_ep0500.pt"
     GNN_EXTRA_ARGS=(cuda python3 native sd_edit)
 else
-    TESTDIR="$REPO/test_paper/mkp/trillium/v1cld"
-    GNN_MODE="gnn_root_v1cld"
-    SUBGRAD_MODE="v1cld"
-    CKPT="$REPO/gnn_sd_edit/runs_v1cld/ckpt_v1cld_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_v1cld_n10_20_500ep_ep0500.pt"
+    TESTDIR="$REPO/test_paper/mkp/trillium/dld"
+    GNN_MODE="gnn_root_dld"
+    SUBGRAD_MODE="dld"
+    CKPT="$REPO/gnn_sd_edit/runs_dld/ckpt_dld_sdedit_scaled_n10_20_lr0.0003_bs32_h128_seed42_v1_sdedit_dld_n10_20_500ep_ep0500.pt"
     GNN_EXTRA_ARGS=(cuda python3 native)
 fi
 

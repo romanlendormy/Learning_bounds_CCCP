@@ -4,7 +4,7 @@ gen_ssp_instance_custom.py — Génère UNE instance SSP-CCP (E,T,N fixés), ave
 fenêtre de difficulté REF (nombre de nœuds Gecode base) personnalisable, et
 l'écrit au format 4-fichiers attendu par load_ssp_instance()
 (solver_generic/ssp/ssp_loader.hpp) -- directement utilisable comme <test_dir>
-pour test_gnn_v1cld_bab / test_gnn_v1cld_bab_batched.
+pour test_gnn_dld_bab / test_gnn_dld_bab_batched.
 
 Contrairement à collect/collect_large_base_samples_ssp.py (dataset
 d'entraînement, échantillonnage 10% des nœuds B&B), ce script produit UNE

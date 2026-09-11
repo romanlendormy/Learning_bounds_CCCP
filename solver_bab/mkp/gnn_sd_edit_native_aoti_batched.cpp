@@ -3,7 +3,7 @@
  * gnn_sd_edit_native_aoti_batched.hpp).
  *
  * Construction de graphe (ActiveXInvariant/build_features_cpp/
- * build_edges_sd_edit_cpp) et lagrangian_v1ld_cpp dupliqués mot pour mot
+ * build_edges_sd_edit_cpp) et lagrangian_sld_cpp dupliqués mot pour mot
  * depuis gnn_sd_edit_native_batched.cpp (cf. .hpp pour la justification de
  * la duplication). SEULE différence : le chargement/appel du modèle utilise
  * torch::inductor::AOTIModelPackageLoader (artefacts .pt2 pré-compilés, un
@@ -223,7 +223,7 @@ void build_edges_sd_edit_cpp(int n_g, int N_z, torch::Tensor& edge_index, torch:
     edge_weight = torch::from_blob(ew.data(), {(int64_t)ew.size()}, torch::kFloat32).clone();
 }
 
-double lagrangian_v1ld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
+double lagrangian_sld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
                            const Vec1d& c_g, int N_z, int n_g, int N, int n_fixed_z1, double epsilon,
                            bool use_surrogate_zeta)
 {
@@ -366,7 +366,7 @@ GNNSdEditNativeAOTIBatched::GNNSdEditNativeAOTIBatched(
     for (double pi : p)
         if (std::abs(pi - p_unif) > 1e-9)
             throw std::invalid_argument(
-                "GNNSdEditNativeAOTIBatched : p non-uniforme — lagrangian_v1ld suppose des "
+                "GNNSdEditNativeAOTIBatched : p non-uniforme — lagrangian_sld suppose des "
                 "scénarios équiprobables (p_i = 1/N)");
 
     if (device == "cuda") {
@@ -501,7 +501,7 @@ void GNNSdEditNativeAOTIBatched::query_batch(
     torch::Tensor h_out_2d = h_out.view({B, V});
     for (int bIdx = 0; bIdx < B; ++bIdx) {
         torch::Tensor lam_b = h_out_2d[bIdx] * feats[bIdx].c_scale / static_cast<double>(feats[bIdx].N);
-        ub_relative_out[bIdx] = lagrangian_v1ld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
+        ub_relative_out[bIdx] = lagrangian_sld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
                                                      feats[bIdx].c_g, N_z, n_g, feats[bIdx].N,
                                                      feats[bIdx].n_fixed_z1, impl_->epsilon,
                                                      impl_->use_surrogate_zeta);

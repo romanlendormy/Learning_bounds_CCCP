@@ -1,7 +1,7 @@
 #!/bin/bash
 # scratch/sanity_check_ref_mode.sh — Complète sanity_check_cleanup.sh : vérifie
 # que le mode "ref" (squelette B&B nu, sans borne GNN — la référence utilisée
-# dans test_paper/mkp/trillium/v1ld/results/ et test_paper/ssp/rorqual/results_ssp.csv) tourne
+# dans test_paper/mkp/trillium/sld/results/ et test_paper/ssp/rorqual/results_ssp.csv) tourne
 # toujours après le nettoyage. Binaires déjà validés par sanity_check_cleanup.sh
 # (pas de rebuild ici).
 #
@@ -46,7 +46,7 @@ fi
 # ── 2. B&B ref SSP minimal ───────────────────────────────────────────────────
 section "2/2 B&B ref SSP minimal (E4_T8_N50/rep0, 60s)"
 LOG2="scratch/logs/check_ref_ssp.log"
-timeout 90 solver_bab/build_gpu_ssp/test_gnn_v1cld_bab \
+timeout 90 solver_bab/build_gpu_ssp/test_gnn_dld_bab \
     test_paper/ssp/rorqual/ssp/E4_T8_N50/rep0 ignored_ckpt 0.0 60 ref \
     > "$LOG2" 2>&1
 cat "$LOG2"

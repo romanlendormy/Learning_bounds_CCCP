@@ -173,7 +173,7 @@ int main(int argc, char* argv[])
                   << "  n=" << inst.n << "  m=" << inst.m << "  N=" << inst.N
                   << "  id=" << instance_id << " ... " << std::flush;
 
-        GecodeV1LDResult res = solve_gecode_bab_mkp_collect_base(
+        GecodeSLDResult res = solve_gecode_bab_mkp_collect_base(
             inst.n, inst.m, inst.N, epsilon,
             inst.c, inst.p, inst.A, inst.b,
             inst_out, node_out, instance_id,

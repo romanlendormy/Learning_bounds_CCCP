@@ -72,7 +72,7 @@ public:
         }
 
         // Même heuristique de branchement que BoundBrancher (RATIO/SIZE_MIN) —
-        // pour rester comparable au mode GNN non batché (test_gnn_v1cld_bab.cpp
+        // pour rester comparable au mode GNN non batché (test_gnn_dld_bab.cpp
         // utilise SIZE_MIN).
         Choice* choice(Space& home) override {
             const auto* data = static_cast<SSPSpaceGNNBatched&>(home).data;
@@ -261,7 +261,7 @@ public:
 // Backend batché — même contrat que SSPGNNBoundBackend (ssp_gnn_bound_backend.hpp)
 // mais UN appel pour tout un bucket. cost_lower_out[i] : borne inférieure sur
 // le coût salarial réel du membre i (même convention que
-// GNNV1CLDNative::query -- valeur directement utilisable, pas de conversion
+// GNNDLDNative::query -- valeur directement utilisable, pas de conversion
 // de signe supplémentaire côté driver).
 // ═════════════════════════════════════════════════════════════════════════════
 struct SSPGNNBoundBackendBatch {

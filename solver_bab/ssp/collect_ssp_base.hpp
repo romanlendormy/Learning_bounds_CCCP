@@ -5,12 +5,12 @@
  * Analogue SSP de gecode_base/collect_gecode_base.hpp (MKP) : réutilise
  * SSPSpaceBnB/SSPSharedData (gecode_bab_ssp.hpp) avec use_lagrangian_bound
  * =false — BoundBrancher::commit ne rappelle alors jamais more(), donc aucun
- * coût v1LD/v1CLD pendant la collecte (pruning CP pur uniquement), comme la
+ * coût SLD/DLD pendant la collecte (pruning CP pur uniquement), comme la
  * variante "B&B base_ref" déjà validée dans bench_ssp_bab_file.cpp. On garde
- * bound_mode=V1LD (défaut de SSPSharedData) plutôt que V1CLD : les deux sont
+ * bound_mode=SLD (défaut de SSPSharedData) plutôt que DLD : les deux sont
  * de toute façon jamais lus (use_lagrangian_bound=false), mais leur allocation
- * est copiée à CHAQUE clone() — V1LD (N×E×T×4 doubles) est T fois plus légère
- * que V1CLD (N×T×E×T×4) pour un effet strictement identique (nul) ici.
+ * est copiée à CHAQUE clone() — SLD (N×E×T×4 doubles) est T fois plus légère
+ * que DLD (N×T×E×T×4) pour un effet strictement identique (nul) ici.
  *
  * Différence structurelle avec MKP : x_flat n'est pas booléen (alphabet à 4
  * symboles Σ={O=0,P=1,R=2,W=3}), donc le masque ternaire (0/1/2) de MKP

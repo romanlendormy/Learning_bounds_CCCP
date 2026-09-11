@@ -1,18 +1,18 @@
 #pragma once
 /*
  * ssp_gnn_bound_backend.hpp — Interface abstraite entre SSPSpaceBnB::more()
- * et l'implémentation concrète de la borne GNN (GNNV1CLDNative,
- * gnn_v1cld_native.hpp), mirror de solver_bab/mkp/gnn_bound_backend.hpp.
+ * et l'implémentation concrète de la borne GNN (GNNDLDNative,
+ * gnn_dld_native.hpp), mirror de solver_bab/mkp/gnn_bound_backend.hpp.
  *
  * Pourquoi cette indirection : gecode_bab_ssp.hpp (et tout binaire qui le
  * compile — bab_ssp_gecode_base_collect, bench_ssp_bab, debug_root_bound,
  * etc., aucun n'a besoin de LibTorch) ne doit dépendre QUE de ce header,
  * sans torche ni dépendance LibTorch. SSPSharedData::gnn_client est un
- * pointeur vers cette interface, pas vers GNNV1CLDNative directement — un
+ * pointeur vers cette interface, pas vers GNNDLDNative directement — un
  * appel virtuel ne force pas le linker à résoudre l'implémentation concrète
- * pour les binaires qui ne construisent jamais de GNNV1CLDNative (gnn_client
+ * pour les binaires qui ne construisent jamais de GNNDLDNative (gnn_client
  * reste nullptr, jamais appelé). Seul le futur binaire qui active
- * bound_mode=GNN a besoin de lier gnn_v1cld_native.cpp + LibTorch.
+ * bound_mode=GNN a besoin de lier gnn_dld_native.cpp + LibTorch.
  */
 
 #include <cstdint>

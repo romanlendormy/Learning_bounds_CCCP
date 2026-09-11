@@ -2,16 +2,16 @@
 /*
  * gnn_bound_backend.hpp — Interface commune aux backends de borne GNN
  * one-shot (bound_mode=GNN) :
- *   - GNNV1LDClient (gnn_v1ld_client.hpp) : process Python persistant, IPC
+ *   - GNNSLDClient (gnn_sld_client.hpp) : process Python persistant, IPC
  *     par pipe (mesuré/isolé — cf. GNNCallTiming). Supporte gnn_variant
  *     "homogene" et "sd_edit" (délègue à build_graph côté Python).
- *   - GNNV1LDNative (gnn_v1ld_native.hpp) : build_graph + forward + L1(λ)
+ *   - GNNSLDNative (gnn_sld_native.hpp) : build_graph + forward + L1(λ)
  *     réimplémentés en C++/LibTorch, en-process (pas d'IPC). gnn_variant
  *     "homogene" (clique scénario-scénario).
  *   - GNNSdEditNative (gnn_sd_edit_native.hpp) : même principe que
- *     GNNV1LDNative, gnn_variant "sd_edit" (étoile scénario-scénario ancrée
+ *     GNNSLDNative, gnn_variant "sd_edit" (étoile scénario-scénario ancrée
  *     au scénario 0 — O(n_g·N) arêtes au lieu de O(n_g·N²)). Fichier séparé
- *     de GNNV1LDNative par choix (cf. commentaire du .hpp), pas une
+ *     de GNNSLDNative par choix (cf. commentaire du .hpp), pas une
  *     sous-classe de celui-ci.
  *
  * gecode_bab.hpp n'appelle que cette interface (via MKPSharedData::gnn_client,
@@ -43,7 +43,7 @@ public:
     // x_mask[k] ∈ {0,1,2} (0=fixé_0, 1=fixé_1, 2=libre), b_res[i][j] = capacité
     // résiduelle du scénario i / contrainte j APRÈS déduction des items fixés
     // à 1 (déjà maintenue incrémentalement par l'appelant, cf.
-    // MKPSpaceV1LD::b_res dans gecode_bab.hpp — ne JAMAIS la recalculer depuis
+    // MKPSpaceSLD::b_res dans gecode_bab.hpp — ne JAMAIS la recalculer depuis
     // x_mask ici : c'est précisément ce que more() maintient à coût O(delta)
     // pour éviter de la ressommer à chaque nœud, cf. revue niveau 1 point B).
     // curr_cost = profit déjà fixé (fp), depth = nombre de variables fixées.

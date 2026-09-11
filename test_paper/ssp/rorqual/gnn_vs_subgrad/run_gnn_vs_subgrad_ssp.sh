@@ -2,9 +2,9 @@
 # run_gnn_vs_subgrad_ssp.sh — Portage CCMKP -> CCSSP de l'expérience "GNN
 # forward vs sous-gradient (t*)" (cf. test_paper/mkp/trillium/gnn_vs_subgrad/run_gnn_vs_subgrad_multi_n.sh,
 # parse_gnn_vs_subgrad.py côté MKP, mécanisme GNN_ROOT/gnn_compare_bound porté
-# dans solver_bab/ssp/gecode_bab_ssp.hpp/.cpp + test_gnn_v1cld_bab.cpp).
+# dans solver_bab/ssp/gecode_bab_ssp.hpp/.cpp + test_gnn_dld_bab.cpp).
 #
-# Portée demandée : V1CLD uniquement, (E,T) in {(4,8),(6,10),(8,12)},
+# Portée demandée : DLD uniquement, (E,T) in {(4,8),(6,10),(8,12)},
 # N in {100,500}, rep 0..9 -- 60 instances (test_paper/ssp/rorqual/ssp/).
 #
 # Pour chaque instance :
@@ -12,7 +12,7 @@
 #       besoin de GPU pour UN SEUL forward, et évite toute contention avec la
 #       campagne trillium_ssp_ref/trillium_ssp_gnn_batched en cours sur les
 #       partitions GPU au moment où ce script a été écrit, 2026-08-23).
-#   (b) lance V1CLD (mode=v1cld) avec GNN_COMPARE_BOUND=<borne de (a)> et
+#   (b) lance DLD (mode=dld) avec GNN_COMPARE_BOUND=<borne de (a)> et
 #       ROOT_SUBGRAD_TRACE=1, T_root=300 T_node=1 -- s'arrête dès que le
 #       sous-gradient dépasse la borne GNN, t* = nb d'itérations.
 #
@@ -32,7 +32,7 @@
 # config du sweep) :
 #   - gnn_root : 1 seul forward, ~3s sur E8_T12_N500 (device=cpu) -- time_lim=60
 #     laisse une marge large.
-#   - v1cld root (T_root=300, T_node=1) : converge/plafonne en ~61 itérations
+#   - dld root (T_root=300, T_node=1) : converge/plafonne en ~61 itérations
 #     sur E8_T12_N500 (la plus grosse config), bien avant T_root=300 -- pas de
 #     signe que le budget doive être augmenté. time_lim=90 laisse une marge
 #     large (le reste de l'arbre, T_node=1, peut ensuite tourner jusqu'au
@@ -42,7 +42,7 @@
 #     vérifié que ce n'est PAS un bug (mécanisme testé avec plusieurs seuils
 #     artificiels, répond correctement -- cf. discussion), mais un résultat
 #     probablement réel : le checkpoint GNN SSP (gnn_ssp/runs/train_scaled/
-#     ckpt_scaled_v1cld_..._ep0150.pt) n'est entraîné QUE sur E in {3,4},
+#     ckpt_scaled_dld_..._ep0150.pt) n'est entraîné QUE sur E in {3,4},
 #     T in {8,12}, N in {20,50} -- (E6,T10)/(E8,T12) et N in {100,500} sont
 #     largement hors distribution pour ce checkpoint. Rapporter honnêtement le
 #     taux de censure/t*=1 plutôt que s'attendre à un résultat façon MKP.
@@ -74,8 +74,8 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 LOGS_DIR="$REPO/test_paper/ssp/rorqual/gnn_vs_subgrad/logs"
 mkdir -p "$LOGS_DIR"
 
-BINARY="$REPO/solver_bab/build_ssp_gnnroot_sanity/test_gnn_v1cld_bab"
-CKPT="$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_v1cld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
+BINARY="$REPO/solver_bab/build_ssp_gnnroot_sanity/test_gnn_dld_bab"
+CKPT="$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_dld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
 
 SIZES=("4 8" "6 10" "8 12")
 N_VALUES=(100 500)
@@ -112,8 +112,8 @@ run_task() {
     fi
 
     local GNN_LOG="$LOGS_DIR/gnn_vs_subgrad_root_${TAG}.log"
-    local SUBGRAD_STDOUT="$LOGS_DIR/gnn_vs_subgrad_v1cld_${TAG}.stdout.log"
-    local SUBGRAD_STDERR="$LOGS_DIR/gnn_vs_subgrad_v1cld_${TAG}.stderr.log"
+    local SUBGRAD_STDOUT="$LOGS_DIR/gnn_vs_subgrad_dld_${TAG}.stdout.log"
+    local SUBGRAD_STDERR="$LOGS_DIR/gnn_vs_subgrad_dld_${TAG}.stderr.log"
 
     echo "======================================================================"
     echo "  gnn_vs_subgrad_ssp — task=$TASK1 — $TAG — $(date)"
@@ -139,9 +139,9 @@ run_task() {
     fi
     echo "  Borne GNN extraite : $GNN_BOUND"
 
-    echo "--- (b) sous-gradient V1CLD avec arrêt anticipé (GNN_COMPARE_BOUND=$GNN_BOUND, T_root=$T_ROOT_MAX, T_node=1) ---"
+    echo "--- (b) sous-gradient DLD avec arrêt anticipé (GNN_COMPARE_BOUND=$GNN_BOUND, T_root=$T_ROOT_MAX, T_node=1) ---"
     GNN_COMPARE_BOUND="$GNN_BOUND" ROOT_SUBGRAD_TRACE=1 timeout $((SUBGRAD_TIME_LIMIT + 60)) "$BINARY" \
-        "$DATASET" "$CKPT" 0.0 "$SUBGRAD_TIME_LIMIT" v1cld cpu "$T_ROOT_MAX" 1 \
+        "$DATASET" "$CKPT" 0.0 "$SUBGRAD_TIME_LIMIT" dld cpu "$T_ROOT_MAX" 1 \
         > "$SUBGRAD_STDOUT" 2> "$SUBGRAD_STDERR"
     grep "root_bound_value" "$SUBGRAD_STDOUT" || echo "[ATTENTION] task=$TASK1 pas de root_bound_value dans $SUBGRAD_STDOUT" >&2
     local N_TRACE

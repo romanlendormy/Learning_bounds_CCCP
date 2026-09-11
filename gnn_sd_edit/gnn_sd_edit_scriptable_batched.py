@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 gnn_sd_edit_scriptable_batched.py — Variante BATCHÉE de
-gnn_sd_edit.gnn_v1ld_scriptable.GNNScriptable : au lieu d'un seul graphe par appel
+gnn_sd_edit.gnn_sld_scriptable.GNNScriptable : au lieu d'un seul graphe par appel
 forward, accepte B graphes empilés en bloc-diagonal (B&B, batching de nœuds —
 cf. plan Étape 2, [[project_bucketed_bab_risk_result]]).
 
@@ -12,14 +12,14 @@ profondeur d'items, garanti par le bucketing par n_g) ET N (même instance en
 cours de résolution) — donc la topologie ET les poids d'arêtes sont
 IDENTIQUES pour tous les membres du batch. Le bloc-diagonal est l'approche la
 plus simple et la moins risquée pour un premier test : GatedGraphConvScriptable
-(gnn_sd_edit.gnn_v1ld_scriptable) est réutilisée SANS AUCUNE MODIFICATION — le
+(gnn_sd_edit.gnn_sld_scriptable) est réutilisée SANS AUCUNE MODIFICATION — le
 scatter/index_add_ générique traite le batch comme un seul grand graphe à
 composantes déconnectées, ce qui est mathématiquement identique à B appels
 séparés. Une variante plus optimisée (arêtes partagées, X avec dimension
 batch explicite, message passing réécrit) est documentée dans le plan comme
 piste différée — à ne coder que si le bloc-diagonal ne suffit pas.
 
-Mêmes noms de paramètres que GNNScriptable/gnn_sd_edit.train_v1LD_sd_edit.GNN
+Mêmes noms de paramètres que GNNScriptable/gnn_sd_edit.train_SLD_sd_edit.GNN
 → load_state_dict(strict=True) fonctionne directement depuis un checkpoint de
 production existant (aucun réentraînement requis pour valider le batching).
 
@@ -43,12 +43,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from gnn_sd_edit.gnn_v1ld_scriptable import GatedGraphConvScriptable  # noqa: E402
+from gnn_sd_edit.gnn_sld_scriptable import GatedGraphConvScriptable  # noqa: E402
 
 
 class GatedGraphConvDecomposed(nn.Module):
     """
-    Variante de GatedGraphConvScriptable (gnn_sd_edit.gnn_v1ld_scriptable) où le
+    Variante de GatedGraphConvScriptable (gnn_sd_edit.gnn_sld_scriptable) où le
     GRUCell est DÉCOMPOSÉ en opérations de base (matmul + sigmoid/tanh) au
     lieu d'appeler nn.GRUCell directement.
 

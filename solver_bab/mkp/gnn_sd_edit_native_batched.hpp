@@ -25,8 +25,8 @@ public:
     // calculer L1(λ)) via MkpBnBSurr (borne agrégée, gnn/bnb_solver.cpp) au
     // lieu de MkpBnB (min de m relaxations séparées, historique). Même valeur
     // ζ_i exacte dans les deux cas — validé ×2.25 plus rapide dans le B&B
-    // V1LD séquentiel équivalent (gecode_bab.hpp), cf. mémoire
-    // project_compare_v1ld_zeta_bnb_surrogate. Défaut false = comportement
+    // SLD séquentiel équivalent (gecode_bab.hpp), cf. mémoire
+    // project_compare_sld_zeta_bnb_surrogate. Défaut false = comportement
     // historique inchangé.
     GNNSdEditNativeBatched(const std::string& checkpoint_path, const std::string& device,
                            int n, int m, int N, double epsilon,

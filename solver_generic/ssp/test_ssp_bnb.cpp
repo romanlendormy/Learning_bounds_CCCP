@@ -1,8 +1,8 @@
 /*
- * test_ssp_bnb.cpp — Non-régression pour SSPProblemBnB / SSPCLDProblemBnB.
+ * test_ssp_bnb.cpp — Non-régression pour SSPProblemBnB / SSPDLDProblemBnB.
  *
  * T1 : masque entièrement libre (-1 partout) ⟹ résultats rigoureusement
- *      identiques à SSPShiftProblem / SSPCLDProblem (les classes de base,
+ *      identiques à SSPShiftProblem / SSPDLDProblem (les classes de base,
  *      déjà validées) — garde-fou contre toute régression introduite par le
  *      refactoring solve_theta/solve_zeta -> solve_theta_masked/solve_zeta_masked.
  *
@@ -13,8 +13,8 @@
 
 #include "ssp_problem.hpp"
 #include "ssp_problem_bnb.hpp"
-#include "ssp_cld_problem.hpp"
-#include "ssp_cld_problem_bnb.hpp"
+#include "ssp_dld_problem.hpp"
+#include "ssp_dld_problem_bnb.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -33,7 +33,7 @@ static bool close(double a, double b, double tol = 1e-9) {
     return std::abs(a - b) <= tol;
 }
 
-// Automate jouet à 3 états (identique à bench_ssp_v1cld2.cpp) :
+// Automate jouet à 3 états (identique à bench_ssp_dld2.cpp) :
 //   0 --O/P--> 0,  0 --W--> 1,  1 --W--> 1,  1 --R--> 2,  2 --R/O--> 2
 //   Acceptants : {0,1,2}.  Symboles : O=0, P=1, R=2, W=3.
 using T3 = std::tuple<int,int,int>;
@@ -72,8 +72,8 @@ int main() {
 
         auto [vt_base, xt_base] = base_ld.solve_theta(cost);
         auto [vt_bnb,  xt_bnb ] = bnb_ld.solve_theta(cost);
-        check(close(vt_base, vt_bnb), "T1a v1LD: theta(mask=libre) == theta(base)");
-        check(xt_base == xt_bnb, "T1b v1LD: x*(mask=libre) == x*(base)");
+        check(close(vt_base, vt_bnb), "T1a SLD: theta(mask=libre) == theta(base)");
+        check(xt_base == xt_bnb, "T1b SLD: x*(mask=libre) == x*(base)");
 
         bool all_zeta_ok = true;
         for (int i = 0; i < N; ++i) {
@@ -81,27 +81,27 @@ int main() {
             auto [vz_bnb,  xz_bnb ] = bnb_ld.solve_zeta(i, cost);
             if (!close(vz_base, vz_bnb)) all_zeta_ok = false;
         }
-        check(all_zeta_ok, "T1c v1LD: zeta(mask=libre) == zeta(base) pour tous les scénarios");
+        check(all_zeta_ok, "T1c SLD: zeta(mask=libre) == zeta(base) pour tous les scénarios");
 
-        SSPCLDProblem    base_cld(TRANSITIONS, ACCEPTING, INITIAL, salary, demand, p, eps, E);
-        SSPCLDProblemBnB bnb_cld (TRANSITIONS, ACCEPTING, INITIAL, salary, demand, p, eps, E, mask_free);
+        SSPDLDProblem    base_dld(TRANSITIONS, ACCEPTING, INITIAL, salary, demand, p, eps, E);
+        SSPDLDProblemBnB bnb_dld (TRANSITIONS, ACCEPTING, INITIAL, salary, demand, p, eps, E, mask_free);
 
-        Vec1d cost_cld = base_cld.c();
-        for (auto& v : cost_cld) v += pert(rng);
+        Vec1d cost_dld = base_dld.c();
+        for (auto& v : cost_dld) v += pert(rng);
 
-        bool all_theta_ok = true, all_zeta_cld_ok = true;
+        bool all_theta_ok = true, all_zeta_dld_ok = true;
         for (int j = 0; j < T; ++j) {
-            auto [vt_b, xt_b] = base_cld.solve_theta(j, cost_cld);
-            auto [vt_n, xt_n] = bnb_cld.solve_theta(j, cost_cld);
+            auto [vt_b, xt_b] = base_dld.solve_theta(j, cost_dld);
+            auto [vt_n, xt_n] = bnb_dld.solve_theta(j, cost_dld);
             if (!close(vt_b, vt_n)) all_theta_ok = false;
             for (int i = 0; i < N; ++i) {
-                auto [vz_b, xz_b] = base_cld.solve_zeta(i, j, cost_cld);
-                auto [vz_n, xz_n] = bnb_cld.solve_zeta(i, j, cost_cld);
-                if (!close(vz_b, vz_n)) all_zeta_cld_ok = false;
+                auto [vz_b, xz_b] = base_dld.solve_zeta(i, j, cost_dld);
+                auto [vz_n, xz_n] = bnb_dld.solve_zeta(i, j, cost_dld);
+                if (!close(vz_b, vz_n)) all_zeta_dld_ok = false;
             }
         }
-        check(all_theta_ok, "T1d v1CLD: theta(mask=libre) == theta(base) pour tout j");
-        check(all_zeta_cld_ok, "T1e v1CLD: zeta(mask=libre) == zeta(base) pour tout (i,j)");
+        check(all_theta_ok, "T1d DLD: theta(mask=libre) == theta(base) pour tout j");
+        check(all_zeta_dld_ok, "T1e DLD: zeta(mask=libre) == zeta(base) pour tout (i,j)");
     }
 
     // ── T2 : masque partiel validé par énumération brute (E=1) ───────────────
@@ -151,9 +151,9 @@ int main() {
 
         auto [vt_bnb, xt_bnb] = bnb.solve_theta(cost);
         check(close(brute_best, vt_bnb),
-              "T2a v1LD masqué (t_force=1 -> W) == optimum énuméré brute-force");
+              "T2a SLD masqué (t_force=1 -> W) == optimum énuméré brute-force");
         check(xt_bnb[t_force * SSP_SIGMA_SIZE + sym_force] > 0.5,
-              "T2b v1LD masqué: x* respecte bien le symbole imposé à t_force");
+              "T2b SLD masqué: x* respecte bien le symbole imposé à t_force");
     }
 
     std::cout << "\n=== " << n_pass << " PASS, " << n_fail << " FAIL ===\n";

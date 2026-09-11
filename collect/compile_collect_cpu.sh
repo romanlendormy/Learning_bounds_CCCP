@@ -13,7 +13,7 @@
 # prod), donc nouvel arbre séparé.
 #
 # Réutilise les dépendances déjà installées (Gecode, OR-Tools, LibTorch CPU,
-# libv1ld_generic_core.a) — ne recompile que gecode_bab.cpp et les fichiers
+# libsld_generic_core.a) — ne recompile que gecode_bab.cpp et les fichiers
 # GNN natifs pour bab_mkp_gecode_base_collect.
 #
 # Soumission :

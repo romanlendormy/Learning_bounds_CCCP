@@ -2,16 +2,16 @@
 """
 parse_gnn_vs_subgrad_ssp.py — Post-traitement de run_gnn_vs_subgrad_ssp.sh.
 
-Portage direct de parse_gnn_vs_subgrad.py (CCMKP) vers CCSSP -- V1CLD
-uniquement (pas de formulation v1ld côté SSP pour cette expérience), tailles
+Portage direct de parse_gnn_vs_subgrad.py (CCMKP) vers CCSSP -- DLD
+uniquement (pas de formulation sld côté SSP pour cette expérience), tailles
 (E,T) in {(4,8),(6,10),(8,12)}, N in {100,500}, rep in 0..9.
 
 Pour chaque instance :
   - lit la borne GNN root-only (logs/gnn_vs_subgrad_root_<tag>.log, clé
-    root_bound_value=... -- imprimée par test_gnn_v1cld_bab.cpp).
-  - lit la trace de convergence du sous-gradient V1CLD
-    (logs/gnn_vs_subgrad_v1cld_<tag>.stderr.log, lignes
-    SUBGRAD_TRACE,v1cld,<t>,<best_upper_convention_cout_reel>) -- PLUSIEURS
+    root_bound_value=... -- imprimée par test_gnn_dld_bab.cpp).
+  - lit la trace de convergence du sous-gradient DLD
+    (logs/gnn_vs_subgrad_dld_<tag>.stderr.log, lignes
+    SUBGRAD_TRACE,dld,<t>,<best_upper_convention_cout_reel>) -- PLUSIEURS
     blocs sont présents (un par branche explorée à la racine littérale, cf.
     commentaire dans gecode_bab_ssp.hpp sur lambda_warmed hérité par
     clonage) ; on ne garde que le DERNIER bloc, dont la valeur finale
@@ -143,8 +143,8 @@ def main():
             for rep in REPS:
                 tag = f"E{E}_T{T}_N{N}_rep{rep}"
                 gnn_log = logs_dir / f"gnn_vs_subgrad_root_{tag}.log"
-                subgrad_stdout = logs_dir / f"gnn_vs_subgrad_v1cld_{tag}.stdout.log"
-                subgrad_stderr = logs_dir / f"gnn_vs_subgrad_v1cld_{tag}.stderr.log"
+                subgrad_stdout = logs_dir / f"gnn_vs_subgrad_dld_{tag}.stdout.log"
+                subgrad_stderr = logs_dir / f"gnn_vs_subgrad_dld_{tag}.stderr.log"
 
                 gnn_bound = read_root_bound(gnn_log)
                 subgrad_root_bound = read_root_bound(subgrad_stdout)

@@ -3,7 +3,7 @@
  * gnn_sd_edit_native_aoti_batched_static.hpp).
  *
  * Construction de graphe (ActiveXInvariant/build_features_cpp/
- * build_edges_sd_edit_cpp) et lagrangian_v1ld_cpp dupliqués mot pour mot
+ * build_edges_sd_edit_cpp) et lagrangian_sld_cpp dupliqués mot pour mot
  * depuis gnn_sd_edit_native_batched.cpp (cf. .hpp pour la justification de
  * la duplication). SEULE différence avec GNNSdEditNativeAOTIBatched (B
  * dynamique) : les artefacts .pt2 sont compilés à B FIGÉ = K, et query_batch
@@ -232,7 +232,7 @@ void build_edges_sd_edit_batched_K_cpp(int n_g, int N_z, int K, torch::Tensor& e
     edge_weight_K = edge_weight_1.unsqueeze(0).expand({K, E}).reshape({static_cast<int64_t>(K) * E}).contiguous();
 }
 
-double lagrangian_v1ld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
+double lagrangian_sld_cpp(const torch::Tensor& lam, const Vec3d& A_g, const Vec2d& b_res_g,
                            const Vec1d& c_g, int N_z, int n_g, int N, int n_fixed_z1, double epsilon,
                            bool use_surrogate_zeta)
 {
@@ -377,7 +377,7 @@ GNNSdEditNativeAOTIStaticBatched::GNNSdEditNativeAOTIStaticBatched(
     for (double pi : p)
         if (std::abs(pi - p_unif) > 1e-9)
             throw std::invalid_argument(
-                "GNNSdEditNativeAOTIStaticBatched : p non-uniforme — lagrangian_v1ld suppose des "
+                "GNNSdEditNativeAOTIStaticBatched : p non-uniforme — lagrangian_sld suppose des "
                 "scénarios équiprobables (p_i = 1/N)");
     if (K < 1)
         throw std::invalid_argument("GNNSdEditNativeAOTIStaticBatched : K doit être >= 1");
@@ -530,7 +530,7 @@ void GNNSdEditNativeAOTIStaticBatched::query_batch(
     torch::Tensor h_out_2d = h_out.view({K, V});
     for (int bIdx = 0; bIdx < B_real; ++bIdx) {
         torch::Tensor lam_b = h_out_2d[bIdx] * feats[bIdx].c_scale / static_cast<double>(feats[bIdx].N);
-        ub_relative_out[bIdx] = lagrangian_v1ld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
+        ub_relative_out[bIdx] = lagrangian_sld_cpp(lam_b, feats[bIdx].A_g, feats[bIdx].b_res_g,
                                                      feats[bIdx].c_g, N_z, n_g, feats[bIdx].N,
                                                      feats[bIdx].n_fixed_z1, impl_->epsilon,
                                                      impl_->use_surrogate_zeta);

@@ -91,9 +91,9 @@ GecodeSSPBabResult solve_gecode_bab_ssp(
     res.root_bound_value       = shared.root_bound_value;
     res.t_bound_total_s        = shared.t_bound_total_s;
     res.t_bab_pure_s           = res.solve_time_s - shared.t_bound_total_s;
-    res.t_v1cld_problem_build_s = shared.t_v1cld_problem_build_s;
-    res.t_v1cld_zeta_theta_s    = shared.t_v1cld_zeta_theta_s;
-    res.v1cld_iters_total       = shared.v1cld_iters_total;
+    res.t_dld_problem_build_s = shared.t_dld_problem_build_s;
+    res.t_dld_zeta_theta_s    = shared.t_dld_zeta_theta_s;
+    res.dld_iters_total       = shared.dld_iters_total;
 
     if (best) {
         res.objective = static_cast<double>(best->total_cost.val()) / SSPSharedData::SCALE;

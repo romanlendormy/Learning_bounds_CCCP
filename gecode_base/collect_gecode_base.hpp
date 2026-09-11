@@ -187,7 +187,7 @@ void write_node_line_base(
 // solve_gecode_bab_mkp_collect_base
 // ─────────────────────────────────────────────────────────────────────────────
 
-GecodeV1LDResult solve_gecode_bab_mkp_collect_base(
+GecodeSLDResult solve_gecode_bab_mkp_collect_base(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
     const Vec3d& A, const Vec2d& b,

@@ -1,7 +1,7 @@
 /*
  * gnn_sd_edit_native_aoti.cpp — Implémentation (cf. gnn_sd_edit_native_aoti.hpp).
  *
- * build_graph_cpp()/lagrangian_v1ld_cpp() dupliqués mot pour mot depuis
+ * build_graph_cpp()/lagrangian_sld_cpp() dupliqués mot pour mot depuis
  * gnn_sd_edit_native.cpp (cf. .hpp pour la justification de la duplication).
  * SEULE différence : le chargement/appel du modèle utilise
  * torch::inductor::AOTIModelPackageLoader (artefacts .pt2 pré-compilés, un
@@ -180,8 +180,8 @@ BuiltGraph build_graph_cpp(int n, int m, int N, const Vec1d& c, const Vec3d& A, 
     return g;
 }
 
-// ── lagrangian_v1ld (IDENTIQUE à gnn_sd_edit_native.cpp) ────────────────────
-double lagrangian_v1ld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double epsilon) {
+// ── lagrangian_sld (IDENTIQUE à gnn_sd_edit_native.cpp) ────────────────────
+double lagrangian_sld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double epsilon) {
     int N_z = g.N_z, n_g = g.n_g, m = static_cast<int>(g.A_g[0].size());
     auto lam_2d = lam.view({N_z, n_g}).to(torch::kFloat64).contiguous();
     auto lam_acc = lam_2d.accessor<double, 2>();
@@ -312,7 +312,7 @@ GNNSdEditNativeAOTI::GNNSdEditNativeAOTI(const std::string& checkpoint_path, con
     for (double pi : p)
         if (std::abs(pi - p_unif) > 1e-9)
             throw std::invalid_argument(
-                "GNNSdEditNativeAOTI : p non-uniforme — lagrangian_v1ld suppose des "
+                "GNNSdEditNativeAOTI : p non-uniforme — lagrangian_sld suppose des "
                 "scénarios équiprobables (p_i = 1/N)");
 
     if (device == "cuda") {
@@ -346,7 +346,7 @@ double GNNSdEditNativeAOTI::query(const std::vector<int8_t>& x_mask, const Vec2d
 
     auto t0 = Clock::now();
     // b_res est déjà à jour (maintenu incrémentalement par l'appelant, cf.
-    // MKPSpaceV1LD::b_res dans gecode_bab.hpp) — ne PLUS le recalculer ici
+    // MKPSpaceSLD::b_res dans gecode_bab.hpp) — ne PLUS le recalculer ici
     // depuis x_mask (cf. revue niveau 1 point B).
     BuiltGraph g = build_graph_cpp(impl_->n, impl_->m, impl_->N, impl_->c, impl_->A, impl_->b,
                                    x_mask, b_res, curr_cost, depth, impl_->epsilon);
@@ -373,7 +373,7 @@ double GNNSdEditNativeAOTI::query(const std::vector<int8_t>& x_mask, const Vec2d
     torch::Tensor lam = h_out * g.c_scale / static_cast<double>(g.N);
     auto t2 = Clock::now();
 
-    double ub_relative = lagrangian_v1ld_cpp(lam, g, impl_->epsilon);
+    double ub_relative = lagrangian_sld_cpp(lam, g, impl_->epsilon);
     auto t3 = Clock::now();
 
     timing.t_graph_build_s   = std::chrono::duration<double>(t1 - t0).count();

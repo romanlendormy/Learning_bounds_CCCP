@@ -1,4 +1,4 @@
-# ssp — Oracles v1LD pour le SSP shift scheduling multi-employés
+# ssp — Oracles SLD pour le SSP shift scheduling multi-employés
 
 ## Problème
 
@@ -23,10 +23,10 @@ Coût de base : `c[e,t,W] = -salary[t]`, `c[e,t,autre] = 0`
 
 ```
 ssp/
-├── ssp_problem.hpp        Classe SSPShiftProblem (hérite V1LDProblem)
+├── ssp_problem.hpp        Classe SSPShiftProblem (hérite SLDProblem)
 ├── ssp_problem.cpp        Oracles solve_theta et solve_zeta
-├── ssp_cld_problem.hpp    Stub — v1CLD non implémenté (TODO)
-├── ssp_cld_problem.cpp    Stub
+├── ssp_dld_problem.hpp    Stub — DLD non implémenté (TODO)
+├── ssp_dld_problem.cpp    Stub
 ├── ssp_loader.hpp         Chargeur d'instances depuis fichiers texte
 ├── ssp_loader.cpp         Implémentation du loader
 ├── test_ssp.cpp           Tests unitaires (§8 du cahier des charges)
@@ -66,7 +66,7 @@ max cost^T x   s.t.  regular(x[e,·], DFA) ∀e,  Σ_e x[e,t,W] ≥ d[t,i] ∀t
   - Indicateurs de travail `work[e][t] ∈ {0,1}`, liés à `shift[e][t] == W`
   - Couverture : `Σ_e work[e][t] ≥ d[t,i]`
   - Objectif : `AddElement` pour `cost_et[shift[e][t]]` (pas de BoolVar par σ)
-- **Exactitude requise** : une solution approchée rendrait la borne v1LD invalide
+- **Exactitude requise** : une solution approchée rendrait la borne SLD invalide
 
 ## Convention de signe (§6)
 

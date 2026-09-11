@@ -92,7 +92,7 @@ void write_node_line_base(
 // solve_gecode_bab_mkp_collect_base
 // ─────────────────────────────────────────────────────────────────────────────
 
-GecodeV1LDResult solve_gecode_bab_mkp_collect_base(
+GecodeSLDResult solve_gecode_bab_mkp_collect_base(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
     const Vec3d& A, const Vec2d& b,
@@ -205,7 +205,7 @@ GecodeV1LDResult solve_gecode_bab_mkp_collect_base(
 
     double elapsed = std::chrono::duration<double>(Clock::now() - t0).count();
 
-    GecodeV1LDResult res;
+    GecodeSLDResult res;
     res.greedy_value          = greedy_val;
     res.best_open_ub          = 0.0;
     res.solve_time_s          = elapsed;

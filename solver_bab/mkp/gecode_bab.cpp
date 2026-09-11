@@ -3,11 +3,11 @@
  */
 
 #include "gecode_bab.hpp"
-#include "gnn_v1ld_client.hpp"
-#include "gnn_v1ld_native.hpp"
+#include "gnn_sld_client.hpp"
+#include "gnn_sld_native.hpp"
 #include "gnn_sd_edit_native.hpp"
 #include "gnn_sd_edit_native_aoti.hpp"
-#include "gnn_v1cld_sd_edit_native.hpp"
+#include "gnn_dld_sd_edit_native.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -76,7 +76,7 @@ std::pair<double, std::vector<int8_t>> greedy_mkp(
     return {val, x};
 }
 
-GecodeV1LDResult solve_gecode_bab_mkp(
+GecodeSLDResult solve_gecode_bab_mkp(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
     const Vec3d& A, const Vec2d& b,
@@ -103,7 +103,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     // ── 1. Solution gloutonne — incumbent initial ─────────────────────────────
     // On calcule une solution faisable avant de lancer Gecode.
     // Sa valeur est postée comme contrainte obj >= greedy_int dans le constructeur
-    // de MKPSpaceV1LD, ce qui élimine d'emblée les branches sous-optimales.
+    // de MKPSpaceSLD, ce qui élimine d'emblée les branches sous-optimales.
     auto [greedy_val, greedy_x] = greedy_mkp(c, p, A, b, epsilon);
     int greedy_int = static_cast<int>(std::floor(greedy_val * MKPSharedData::SCALE));
 
@@ -131,7 +131,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     // Découple more() de BoundBrancher::commit() (cf. revue niveau 1 point A) :
     // la boucle DFS ci-dessous appelle explicitement more() APRÈS un premier
     // status() de propagation CP pure, pour ne payer le coût de la borne
-    // (V1LD/V1CLD/GNN) que sur les nœuds que le CP seul n'a pas déjà tués.
+    // (SLD/DLD/GNN) que sur les nœuds que le CP seul n'a pas déjà tués.
     shared.defer_bound_to_driver = true;
 
     // ── 2bis. Mode GNN : backend IPC (process Python persistant) ou natif
@@ -142,28 +142,28 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     std::unique_ptr<GNNBoundBackend> gnn_client;
     double t_gnn_warmup_s = 0.0;
     if (bound_mode == BoundMode::GNN || bound_mode == BoundMode::GNN_ROOT ||
-        bound_mode == BoundMode::GNN_ROOT_V1CLD) {
+        bound_mode == BoundMode::GNN_ROOT_DLD) {
         if (gnn_checkpoint_path.empty())
             throw std::invalid_argument(
-                "solve_gecode_bab_mkp : bound_mode=GNN/GNN_ROOT/GNN_ROOT_V1CLD requiert "
+                "solve_gecode_bab_mkp : bound_mode=GNN/GNN_ROOT/GNN_ROOT_DLD requiert "
                 "gnn_checkpoint_path");
-        if (bound_mode == BoundMode::GNN_ROOT_V1CLD || gnn_backend == "native" || gnn_backend == "native_aoti") {
-            // GNN_ROOT_V1CLD : adaptateur mono-nœud (query()) autour du
-            // backend batché V1CLD (GNNV1CLDSdEditNativeBatched, query_batch,
-            // taille de batch 1) — cf. gnn_v1cld_sd_edit_native.hpp. Une seule
-            // topologie de graphe disponible côté V1CLD (sd_edit) : pas de
+        if (bound_mode == BoundMode::GNN_ROOT_DLD || gnn_backend == "native" || gnn_backend == "native_aoti") {
+            // GNN_ROOT_DLD : adaptateur mono-nœud (query()) autour du
+            // backend batché DLD (GNNDLDSdEditNativeBatched, query_batch,
+            // taille de batch 1) — cf. gnn_dld_sd_edit_native.hpp. Une seule
+            // topologie de graphe disponible côté DLD (sd_edit) : pas de
             // gnn_variant=homogene ni de backend ipc/native_aoti pour ce mode.
-            if (bound_mode == BoundMode::GNN_ROOT_V1CLD) {
+            if (bound_mode == BoundMode::GNN_ROOT_DLD) {
                 if (gnn_backend != "native")
                     throw std::invalid_argument(
-                        "solve_gecode_bab_mkp : bound_mode=GNN_ROOT_V1CLD ne supporte que "
-                        "gnn_backend=native (pas d'adaptateur IPC/AOTI V1CLD pour l'instant)");
-                gnn_client = std::make_unique<GNNV1CLDSdEditNative>(
+                        "solve_gecode_bab_mkp : bound_mode=GNN_ROOT_DLD ne supporte que "
+                        "gnn_backend=native (pas d'adaptateur IPC/AOTI DLD pour l'instant)");
+                gnn_client = std::make_unique<GNNDLDSdEditNative>(
                     gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b,
                     use_surrogate_zeta);
             } else {
             // build_graph_cpp() est réimplémenté séparément pour chaque
-            // topologie de graphe : GNNV1LDNative (gnn_v1ld_native.cpp,
+            // topologie de graphe : GNNSLDNative (gnn_sld_native.cpp,
             // gnn_variant="homogene", clique scénario-scénario) et
             // GNNSdEditNative (gnn_sd_edit_native.cpp, gnn_variant="sd_edit",
             // étoile ancrée au scénario 0 — cf. mémoire "portage backend natif
@@ -183,7 +183,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
                 gnn_client = std::make_unique<GNNSdEditNativeAOTI>(
                     gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b);
             else if (gnn_variant == "homogene")
-                gnn_client = std::make_unique<GNNV1LDNative>(
+                gnn_client = std::make_unique<GNNSLDNative>(
                     gnn_checkpoint_path, gnn_device, n, m, N, epsilon, c, p, A, b);
             else if (gnn_variant == "sd_edit")
                 gnn_client = std::make_unique<GNNSdEditNative>(
@@ -226,7 +226,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
                 t_gnn_warmup_s = std::chrono::duration<double>(Clock::now() - t_warm0).count();
             }
         } else if (gnn_backend == "ipc") {
-            gnn_client = std::make_unique<GNNV1LDClient>(
+            gnn_client = std::make_unique<GNNSLDClient>(
                 gnn_python_exe, gnn_server_script, gnn_checkpoint_path, gnn_device,
                 n, m, N, epsilon, c, p, A, b, gnn_variant);
         } else {
@@ -257,7 +257,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
         return std::chrono::duration<double>(Clock::now() - t0).count() < time_lim;
     };
 
-    using NodeTup = std::tuple<double, int, MKPSpaceV1LD*>;  // (ub, depth, space)
+    using NodeTup = std::tuple<double, int, MKPSpaceSLD*>;  // (ub, depth, space)
     std::vector<NodeTup> open;  // pile DFS (LIFO)
 
     int64_t nodes          = 0;
@@ -265,11 +265,11 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     int64_t max_depth      = 0;
     int64_t incumbent_impr = 0;
     double  best_val       = greedy_val;
-    MKPSpaceV1LD* best     = nullptr;
+    MKPSpaceSLD* best     = nullptr;
 
     // Initialiser la racine
     {
-        MKPSpaceV1LD* root = new MKPSpaceV1LD(&shared);
+        MKPSpaceSLD* root = new MKPSpaceSLD(&shared);
         SpaceStatus rst = root->status();
         if (rst == SS_BRANCH) {
             double rub = root->obj.max() / (double)MKPSharedData::SCALE;
@@ -309,7 +309,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
         const Gecode::Choice* c = space->choice();
 
         for (int a = 0; a < 2; ++a) {
-            MKPSpaceV1LD* child = static_cast<MKPSpaceV1LD*>(space->clone());
+            MKPSpaceSLD* child = static_cast<MKPSpaceSLD*>(space->clone());
             child->commit(*c, a);                // fixation seule (defer_bound_to_driver=true,
                                                    // cf. BoundBrancher::commit()) — more() n'est
                                                    // PAS appelé ici
@@ -318,7 +318,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
 
             if (cst == SS_FAILED) { ++fails; delete child; continue; }
 
-            // Borne (V1LD/V1CLD/GNN) calculée seulement APRÈS que la
+            // Borne (SLD/DLD/GNN) calculée seulement APRÈS que la
             // propagation CP native ait eu sa chance de tuer le nœud
             // gratuitement — cf. revue niveau 1 point A : dans l'ancien
             // ordre (borne postée depuis commit(), avant tout status()), le
@@ -365,7 +365,7 @@ GecodeV1LDResult solve_gecode_bab_mkp(
     double elapsed = std::chrono::duration<double>(Clock::now() - t0).count();
 
     // ── 7. Construction du résultat ───────────────────────────────────────────
-    GecodeV1LDResult res;
+    GecodeSLDResult res;
     res.greedy_value     = greedy_val;
     res.best_open_ub     = shared.best_open_ub;
     res.solve_time_s     = elapsed;

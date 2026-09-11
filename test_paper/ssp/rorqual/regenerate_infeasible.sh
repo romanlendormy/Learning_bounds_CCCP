@@ -1,6 +1,6 @@
 #!/bin/bash
 # test_paper/ssp/rorqual/regenerate_infeasible.sh — Régénère les 12
-# instances où le B&B REF exact (campaign_v1ld_v1cld_vs_ref, job 19434333,
+# instances où le B&B REF exact (campaign_sld_dld_vs_ref, job 19434333,
 # budget 1800s) n'a trouvé AUCUNE solution (ref_status=INFEASIBLE ou
 # TIMEOUT-sans-incumbent) : la calibration par bissection (ssp_probe, 5s,
 # pruning CP pur) atteignait bien la fenêtre de difficulté visée, mais ces

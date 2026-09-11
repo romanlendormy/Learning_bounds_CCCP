@@ -1,7 +1,7 @@
 #!/bin/bash
 # scratch/inventory_runs_checkpoints.sh — Inventaire par run_tag des
-# checkpoints dans gnn_sd_edit/runs/train_scaled/ (V1LD) et
-# gnn_sd_edit/runs_v1cld/ (V1CLD), pour décider quoi garder/supprimer.
+# checkpoints dans gnn_sd_edit/runs/train_scaled/ (SLD) et
+# gnn_sd_edit/runs_dld/ (DLD), pour décider quoi garder/supprimer.
 # CPU seul, aucun calcul lourd -- juste des du/ls sur Lustre.
 #
 # Usage : sbatch scratch/inventory_runs_checkpoints.sh
@@ -21,7 +21,7 @@ cd "$REPO"
 mkdir -p scratch/logs
 
 echo "======================================================================"
-echo "  V1LD -- gnn_sd_edit/runs/train_scaled/ (par run_tag)"
+echo "  SLD -- gnn_sd_edit/runs/train_scaled/ (par run_tag)"
 echo "======================================================================"
 for tag in "calib\." "v1_sdedit_light_100k" "n10_20_25_20k_100ep" "v1_sdedit_500ep"; do
     echo "--- $tag ---"
@@ -36,26 +36,26 @@ du -sh gnn_sd_edit/runs/overfit_single/ 2>/dev/null
 
 echo
 echo "======================================================================"
-echo "  V1CLD -- gnn_sd_edit/runs_v1cld/ (par groupe)"
+echo "  DLD -- gnn_sd_edit/runs_dld/ (par groupe)"
 echo "======================================================================"
 echo "--- calib ---"
-ls gnn_sd_edit/runs_v1cld/*calib* 2>/dev/null | wc -l
-ls gnn_sd_edit/runs_v1cld/*calib* 2>/dev/null | xargs du -ch 2>/dev/null | tail -1
+ls gnn_sd_edit/runs_dld/*calib* 2>/dev/null | wc -l
+ls gnn_sd_edit/runs_dld/*calib* 2>/dev/null | xargs du -ch 2>/dev/null | tail -1
 
 echo "--- run court superseded (ep0010..ep0100, sans suffixe _500ep) ---"
-ls gnn_sd_edit/runs_v1cld/*v1cld_n10_20_ep* 2>/dev/null | wc -l
-ls gnn_sd_edit/runs_v1cld/*v1cld_n10_20_ep* 2>/dev/null | xargs du -ch 2>/dev/null | tail -1
+ls gnn_sd_edit/runs_dld/*dld_n10_20_ep* 2>/dev/null | wc -l
+ls gnn_sd_edit/runs_dld/*dld_n10_20_ep* 2>/dev/null | xargs du -ch 2>/dev/null | tail -1
 
 echo "--- _500ep intermédiaires (ep0010 à ep0490) ---"
-ls gnn_sd_edit/runs_v1cld/*_500ep_ep0[0-4]*.pt 2>/dev/null | grep -v "ep0500" | wc -l
-ls gnn_sd_edit/runs_v1cld/*_500ep_ep0[0-4]*.pt 2>/dev/null | grep -v "ep0500" | xargs du -ch 2>/dev/null | tail -1
+ls gnn_sd_edit/runs_dld/*_500ep_ep0[0-4]*.pt 2>/dev/null | grep -v "ep0500" | wc -l
+ls gnn_sd_edit/runs_dld/*_500ep_ep0[0-4]*.pt 2>/dev/null | grep -v "ep0500" | xargs du -ch 2>/dev/null | tail -1
 
 echo "--- _500ep final (ep0500, LE checkpoint de production) ---"
-ls gnn_sd_edit/runs_v1cld/*_500ep_ep0500* 2>/dev/null
-du -ch gnn_sd_edit/runs_v1cld/*_500ep_ep0500* 2>/dev/null | tail -1
+ls gnn_sd_edit/runs_dld/*_500ep_ep0500* 2>/dev/null
+du -ch gnn_sd_edit/runs_dld/*_500ep_ep0500* 2>/dev/null | tail -1
 
 echo
 echo "======================================================================"
 echo "  Totaux"
 echo "======================================================================"
-du -sh gnn_sd_edit/runs/ gnn_sd_edit/runs_v1cld/ 2>/dev/null
+du -sh gnn_sd_edit/runs/ gnn_sd_edit/runs_dld/ 2>/dev/null

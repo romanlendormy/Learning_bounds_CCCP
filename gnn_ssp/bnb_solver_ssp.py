@@ -4,10 +4,10 @@ bnb_solver_ssp.py — Wrapper ctypes pour SSPShiftProblem::solve_theta/solve_zet
 Miroir de gnn/bnb_solver.py (MKP), mais solve_zeta y dépend d'OR-Tools CP-SAT
 (coût NP-difficile en pratique — cf. benchmark manuel, ~11s pour E=8,T=10 même
 avec un DFA jouet à 3 états) : contrairement au B&B maison du MKP, le lien
-nécessite OR-Tools. Compile ssp_v1ld_wrapper.cpp automatiquement si le .so est
+nécessite OR-Tools. Compile ssp_sld_wrapper.cpp automatiquement si le .so est
 absent ou plus récent.
 
-Utilisé par lagrangian_v1ld_ssp() dans train_v1LD_ssp.py.
+Utilisé par lagrangian_sld_ssp() dans train_SLD_ssp.py.
 """
 
 import ctypes
@@ -17,8 +17,8 @@ import numpy as np
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 _REPO     = os.path.dirname(_DIR)
-_SO_PATH  = os.path.join(_DIR, "_ssp_v1ld_wrapper.so")
-_CPP_PATH = os.path.join(_DIR, "ssp_v1ld_wrapper.cpp")
+_SO_PATH  = os.path.join(_DIR, "_ssp_sld_wrapper.so")
+_CPP_PATH = os.path.join(_DIR, "ssp_sld_wrapper.cpp")
 
 _SOLVER_GENERIC = os.path.join(_REPO, "solver_generic")
 _BUILD_CC       = os.path.join(_SOLVER_GENERIC, "build_cc")
@@ -38,12 +38,12 @@ def _needs_recompile() -> bool:
 
 
 def _compile():
-    lib_static = os.path.join(_BUILD_CC, "libv1ld_generic_core.a")
+    lib_static = os.path.join(_BUILD_CC, "libsld_generic_core.a")
     ortools_so = os.path.join(_ORTOOLS, "lib", "libortools.so.9.6.2534")
     if not os.path.isfile(lib_static):
         raise RuntimeError(
             f"{lib_static} introuvable — compiler d'abord solver_generic "
-            f"(cf. compile_cc.sh, target v1ld_generic_core)."
+            f"(cf. compile_cc.sh, target sld_generic_core)."
         )
     if not os.path.isfile(ortools_so):
         raise RuntimeError(f"{ortools_so} introuvable.")
@@ -64,7 +64,7 @@ def _compile():
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"Compilation de ssp_v1ld_wrapper.cpp échouée :\n{result.stderr}")
+        raise RuntimeError(f"Compilation de ssp_sld_wrapper.cpp échouée :\n{result.stderr}")
 
 
 def _load() -> ctypes.CDLL:
@@ -81,8 +81,8 @@ def _load() -> ctypes.CDLL:
 
     lib = ctypes.CDLL(_SO_PATH)
 
-    lib.ssp_v1ld_create.restype  = ctypes.c_void_p
-    lib.ssp_v1ld_create.argtypes = [
+    lib.ssp_sld_create.restype  = ctypes.c_void_p
+    lib.ssp_sld_create.argtypes = [
         ctypes.c_int, ctypes.POINTER(ctypes.c_int),   # n_trans, trans_flat
         ctypes.c_int, ctypes.POINTER(ctypes.c_int),   # n_acc, accepting
         ctypes.c_int,                                 # initial
@@ -92,15 +92,15 @@ def _load() -> ctypes.CDLL:
         ctypes.c_double, ctypes.c_int,                # epsilon, E
         ctypes.POINTER(ctypes.c_int),                  # mask_flat (E*T,) -1=libre
     ]
-    lib.ssp_v1ld_destroy.argtypes = [ctypes.c_void_p]
-    lib.ssp_v1ld_n_vars.restype   = ctypes.c_int
-    lib.ssp_v1ld_n_vars.argtypes  = [ctypes.c_void_p]
+    lib.ssp_sld_destroy.argtypes = [ctypes.c_void_p]
+    lib.ssp_sld_n_vars.restype   = ctypes.c_int
+    lib.ssp_sld_n_vars.argtypes  = [ctypes.c_void_p]
 
-    lib.ssp_v1ld_solve_theta.restype  = ctypes.c_double
-    lib.ssp_v1ld_solve_theta.argtypes = [
+    lib.ssp_sld_solve_theta.restype  = ctypes.c_double
+    lib.ssp_sld_solve_theta.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
-    lib.ssp_v1ld_solve_zeta.restype  = ctypes.c_double
-    lib.ssp_v1ld_solve_zeta.argtypes = [
+    lib.ssp_sld_solve_zeta.restype  = ctypes.c_double
+    lib.ssp_sld_solve_zeta.argtypes = [
         ctypes.c_void_p, ctypes.c_int,
         ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
 
@@ -148,52 +148,52 @@ class SSPShiftProblemPy:
                 *[int(v) for row in mask for v in row])
 
         self._lib = lib
-        self._handle = lib.ssp_v1ld_create(
+        self._handle = lib.ssp_sld_create(
             n_trans, trans_flat, n_acc, acc_arr, int(initial),
             T, salary_arr, N, demand_flat, p_arr, float(epsilon), int(E),
             mask_flat)
-        self.n_vars = lib.ssp_v1ld_n_vars(self._handle)
+        self.n_vars = lib.ssp_sld_n_vars(self._handle)
 
     def solve_theta(self, cost: np.ndarray) -> tuple[float, np.ndarray]:
         """cost : (n_vars,) float64. Retourne (valeur, x (n_vars,) float64 0/1)."""
         cost_c = (ctypes.c_double * self.n_vars)(*cost.astype(np.float64))
         x_out  = (ctypes.c_double * self.n_vars)()
-        val = self._lib.ssp_v1ld_solve_theta(self._handle, cost_c, x_out)
+        val = self._lib.ssp_sld_solve_theta(self._handle, cost_c, x_out)
         return val, np.frombuffer(x_out, dtype=np.float64).copy()
 
     def solve_zeta(self, i: int, cost: np.ndarray) -> tuple[float, np.ndarray]:
         """cost : (n_vars,) float64. Retourne (valeur, x (n_vars,) float64 0/1)."""
         cost_c = (ctypes.c_double * self.n_vars)(*cost.astype(np.float64))
         x_out  = (ctypes.c_double * self.n_vars)()
-        val = self._lib.ssp_v1ld_solve_zeta(self._handle, int(i), cost_c, x_out)
+        val = self._lib.ssp_sld_solve_zeta(self._handle, int(i), cost_c, x_out)
         return val, np.frombuffer(x_out, dtype=np.float64).copy()
 
     def __del__(self):
         try:
             if getattr(self, "_handle", None) is not None:
-                self._lib.ssp_v1ld_destroy(self._handle)
+                self._lib.ssp_sld_destroy(self._handle)
         except Exception:
             pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# V1CLD — miroir de ce qui précède, ciblant SSPCLDProblemBnB (ssp_v1cld_wrapper.cpp)
+# DLD — miroir de ce qui précède, ciblant SSPDLDProblemBnB (ssp_dld_wrapper.cpp)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SO_PATH_CLD  = os.path.join(_DIR, "_ssp_v1cld_wrapper.so")
-_CPP_PATH_CLD = os.path.join(_DIR, "ssp_v1cld_wrapper.cpp")
+_SO_PATH_DLD  = os.path.join(_DIR, "_ssp_dld_wrapper.so")
+_CPP_PATH_DLD = os.path.join(_DIR, "ssp_dld_wrapper.cpp")
 
-_lib_cld = None
+_lib_dld = None
 
 
-def _needs_recompile_cld() -> bool:
-    if not os.path.exists(_SO_PATH_CLD):
+def _needs_recompile_dld() -> bool:
+    if not os.path.exists(_SO_PATH_DLD):
         return True
-    return os.path.getmtime(_CPP_PATH_CLD) > os.path.getmtime(_SO_PATH_CLD)
+    return os.path.getmtime(_CPP_PATH_DLD) > os.path.getmtime(_SO_PATH_DLD)
 
 
-def _compile_cld():
-    lib_static = os.path.join(_BUILD_CC, "libv1ld_generic_core.a")
+def _compile_dld():
+    lib_static = os.path.join(_BUILD_CC, "libsld_generic_core.a")
     ortools_so = os.path.join(_ORTOOLS, "lib", "libortools.so.9.6.2534")
     if not os.path.isfile(lib_static):
         raise RuntimeError(f"{lib_static} introuvable — compiler d'abord solver_generic.")
@@ -210,31 +210,31 @@ def _compile_cld():
         "-isystem", os.path.join(_ORTOOLS, "include"),
         "-isystem", os.path.join(_ORTOOLS, "include", "coin"),
         "-isystem", os.path.join(_ORTOOLS, "include", "eigen3"),
-        _CPP_PATH_CLD, "-o", _SO_PATH_CLD,
+        _CPP_PATH_DLD, "-o", _SO_PATH_DLD,
         "-Wl,-rpath," + os.path.join(_ORTOOLS, "lib"),
         lib_static, ortools_so, "-ldl", "-lpthread", "-lrt",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"Compilation de ssp_v1cld_wrapper.cpp échouée :\n{result.stderr}")
+        raise RuntimeError(f"Compilation de ssp_dld_wrapper.cpp échouée :\n{result.stderr}")
 
 
-def _load_cld() -> ctypes.CDLL:
-    global _lib_cld
-    if _lib_cld is not None:
-        return _lib_cld
-    if _needs_recompile_cld():
-        _compile_cld()
+def _load_dld() -> ctypes.CDLL:
+    global _lib_dld
+    if _lib_dld is not None:
+        return _lib_dld
+    if _needs_recompile_dld():
+        _compile_dld()
 
     ortools_lib_dir = os.path.join(_ORTOOLS, "lib")
     ld_path = os.environ.get("LD_LIBRARY_PATH", "")
     if ortools_lib_dir not in ld_path.split(os.pathsep):
         os.environ["LD_LIBRARY_PATH"] = ortools_lib_dir + os.pathsep + ld_path
 
-    lib = ctypes.CDLL(_SO_PATH_CLD)
+    lib = ctypes.CDLL(_SO_PATH_DLD)
 
-    lib.ssp_v1cld_create.restype  = ctypes.c_void_p
-    lib.ssp_v1cld_create.argtypes = [
+    lib.ssp_dld_create.restype  = ctypes.c_void_p
+    lib.ssp_dld_create.argtypes = [
         ctypes.c_int, ctypes.POINTER(ctypes.c_int),
         ctypes.c_int, ctypes.POINTER(ctypes.c_int),
         ctypes.c_int,
@@ -244,30 +244,30 @@ def _load_cld() -> ctypes.CDLL:
         ctypes.c_double, ctypes.c_int,
         ctypes.POINTER(ctypes.c_int),
     ]
-    lib.ssp_v1cld_destroy.argtypes = [ctypes.c_void_p]
-    lib.ssp_v1cld_n_vars.restype   = ctypes.c_int
-    lib.ssp_v1cld_n_vars.argtypes  = [ctypes.c_void_p]
+    lib.ssp_dld_destroy.argtypes = [ctypes.c_void_p]
+    lib.ssp_dld_n_vars.restype   = ctypes.c_int
+    lib.ssp_dld_n_vars.argtypes  = [ctypes.c_void_p]
 
-    lib.ssp_v1cld_solve_theta.restype  = ctypes.c_double
-    lib.ssp_v1cld_solve_theta.argtypes = [
+    lib.ssp_dld_solve_theta.restype  = ctypes.c_double
+    lib.ssp_dld_solve_theta.argtypes = [
         ctypes.c_void_p, ctypes.c_int,
         ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
-    lib.ssp_v1cld_solve_zeta.restype  = ctypes.c_double
-    lib.ssp_v1cld_solve_zeta.argtypes = [
+    lib.ssp_dld_solve_zeta.restype  = ctypes.c_double
+    lib.ssp_dld_solve_zeta.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
         ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
 
-    _lib_cld = lib
+    _lib_dld = lib
     return lib
 
 
-class SSPCLDProblemPy:
-    """Wrapper Python de SSPCLDProblemBnB — miroir de SSPShiftProblemPy, avec un
-    indice de période j en plus sur solve_theta/solve_zeta (décomposition v1CLD)."""
+class SSPDLDProblemPy:
+    """Wrapper Python de SSPDLDProblemBnB — miroir de SSPShiftProblemPy, avec un
+    indice de période j en plus sur solve_theta/solve_zeta (décomposition DLD)."""
 
     def __init__(self, transitions, accepting, initial, salary, demand, p, epsilon, E,
                  mask=None):
-        lib = _load_cld()
+        lib = _load_dld()
         n_trans = len(transitions)
         trans_flat = (ctypes.c_int * (3 * n_trans))(
             *[v for tri in transitions for v in tri])
@@ -289,27 +289,27 @@ class SSPCLDProblemPy:
                 *[int(v) for row in mask for v in row])
 
         self._lib = lib
-        self._handle = lib.ssp_v1cld_create(
+        self._handle = lib.ssp_dld_create(
             n_trans, trans_flat, n_acc, acc_arr, int(initial),
             T, salary_arr, N, demand_flat, p_arr, float(epsilon), int(E),
             mask_flat)
-        self.n_vars = lib.ssp_v1cld_n_vars(self._handle)
+        self.n_vars = lib.ssp_dld_n_vars(self._handle)
 
     def solve_theta(self, j: int, cost: np.ndarray) -> tuple[float, np.ndarray]:
         cost_c = (ctypes.c_double * self.n_vars)(*cost.astype(np.float64))
         x_out  = (ctypes.c_double * self.n_vars)()
-        val = self._lib.ssp_v1cld_solve_theta(self._handle, int(j), cost_c, x_out)
+        val = self._lib.ssp_dld_solve_theta(self._handle, int(j), cost_c, x_out)
         return val, np.frombuffer(x_out, dtype=np.float64).copy()
 
     def solve_zeta(self, i: int, j: int, cost: np.ndarray) -> tuple[float, np.ndarray]:
         cost_c = (ctypes.c_double * self.n_vars)(*cost.astype(np.float64))
         x_out  = (ctypes.c_double * self.n_vars)()
-        val = self._lib.ssp_v1cld_solve_zeta(self._handle, int(i), int(j), cost_c, x_out)
+        val = self._lib.ssp_dld_solve_zeta(self._handle, int(i), int(j), cost_c, x_out)
         return val, np.frombuffer(x_out, dtype=np.float64).copy()
 
     def __del__(self):
         try:
             if getattr(self, "_handle", None) is not None:
-                self._lib.ssp_v1cld_destroy(self._handle)
+                self._lib.ssp_dld_destroy(self._handle)
         except Exception:
             pass

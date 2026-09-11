@@ -134,7 +134,7 @@ GNNBatchedSSPBabResult solve_gecode_bab_ssp_gnn_batched(
             // lb_salary : borne inférieure sur le coût salarial réel, déjà
             // dans cette convention (pas de -dual_val ici, cf. more() où la
             // conversion depuis la convention max(-salaire) a lieu -- le
-            // backend renvoie directement cost_lower comme GNNV1CLDNative::query).
+            // backend renvoie directement cost_lower comme GNNDLDNative::query).
             const double lb_salary = cost_lower[i];
             const int lb_int = static_cast<int>(std::floor(lb_salary * SSPSharedData::SCALE));
             sp->post_gnn_bound(lb_int);

@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_gnn_batched_array_ssp.sh — mode gnn_batched V1CLD (K=8, backend natif
+# run_gnn_batched_array_ssp.sh — mode gnn_batched DLD (K=8, backend natif
 # TorchScript, device cuda) sur les 270 instances de test_paper/ssp/rorqual/ssp/,
 # une tâche d'array par instance (instances_list.txt : E T N rep chemin_relatif).
 #
@@ -11,9 +11,9 @@
 #
 # Deux binaires exécutés par tâche, dans le MÊME job (même allocation GPU,
 # pas de job supplémentaire) :
-#   1) test_gnn_v1cld_bab_batched -- le run PRINCIPAL (temps, nœuds, gap final,
+#   1) test_gnn_dld_bab_batched -- le run PRINCIPAL (temps, nœuds, gap final,
 #      répartition forward/graph_build/zeta_theta déjà imprimée par le binaire).
-#   2) test_gnn_v1cld_bab (mode "gnn", séquentiel, PAS batché) -- run auxiliaire
+#   2) test_gnn_dld_bab (mode "gnn", séquentiel, PAS batché) -- run auxiliaire
 #      COURT (time_lim=60s) dans le seul but de lire root_bound_value, imprimé
 #      tel quel par ce binaire (capturé une seule fois, au tout premier nœud,
 #      cf. gecode_bab_ssp.hpp:597 "is_first" -- une vraie borne à la racine,
@@ -86,14 +86,14 @@ BAB_BUILD="$REPO/solver_bab/build_gpu_ssp"
 # SEULE FOIS, en amont, avant `sbatch --array` (cf.
 # build_ssp_binaries_once.sh) -- ici on vérifie juste que les binaires
 # existent, on échoue bruyamment sinon plutôt que de retenter un build.
-BIN_BATCHED="$BAB_BUILD/test_gnn_v1cld_bab_batched"
-BIN_SEQ="$BAB_BUILD/test_gnn_v1cld_bab"
+BIN_BATCHED="$BAB_BUILD/test_gnn_dld_bab_batched"
+BIN_SEQ="$BAB_BUILD/test_gnn_dld_bab"
 if [[ ! -x "$BIN_BATCHED" || ! -x "$BIN_SEQ" ]]; then
     echo "[ERREUR] binaire manquant ($BIN_BATCHED ou $BIN_SEQ) -- lancer" \
          "test_paper/ssp/rorqual/build_ssp_binaries_once.sh AVANT de soumettre ce job array." >&2
     exit 1
 fi
-CKPT="$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_v1cld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
+CKPT="$REPO/gnn_ssp/runs/train_scaled/ckpt_scaled_dld_E3_T12_N20_E3_T12_N50_E4_T12_N20_E4_T12_N50_E4_T8_N20_E4_T8_N50_lr0.0003_bs32_h64_seed42_v6_periodpool_1k_ep0150.pt"
 # illimité par défaut (cf. en-tête) ; SSP_SMOKE_TIME_LIM_GNN permet de forcer
 # un budget court pour un smoke test (même logique que
 # SSP_SMOKE_TIME_LIM_REF côté run_ref_array_ssp.sh) -- ne pas positionner
@@ -118,7 +118,7 @@ echo "=== SECTION: gnn_batched ==="
 # "|| true" sur les deux invocations : avec expected_opt=0.0 (pas de
 # vérification voulue), les deux binaires impriment "FAIL"/"INCOMPLET" et
 # retournent un code non nul même sur un run réussi/attendu (bug de
-# test_gnn_v1cld_bab[_batched].cpp : la branche finale ne traite pas
+# test_gnn_dld_bab[_batched].cpp : la branche finale ne traite pas
 # expected_opt<=0.0 comme "vérification désactivée" côté code de sortie,
 # seulement côté affichage). Sans ce garde, "set -e" tuerait la tâche avant
 # le parsing. Le run sidecar est de toute façon attendu INCOMPLET (time_lim

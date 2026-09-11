@@ -4,7 +4,7 @@
 
 Objectif : construire des instances SSP-CCP où REF (Gecode CP pur, sans
 borne) galère vraiment, pour pouvoir juger honnêtement si une borne
-(V1CLD/GNN) apporte quelque chose. Un tirage aléatoire "brut" de la demande
+(DLD/GNN) apporte quelque chose. Un tirage aléatoire "brut" de la demande
 est presque toujours soit trivialement facile, soit infaisable — la zone
 "dure mais faisable" est étroite et doit être calibrée, pas laissée au
 hasard (cf. `ssp_stochastic/calibrate_adaptive.py`, qui existe déjà pour ça).
@@ -130,6 +130,6 @@ saut des employés fixés dans ζ/θ) qui donnent des gains réels mais modestes
 nominale (E,T,N) -- le message principal n'est probablement pas "l'optimisation
 n'a pas marché", mais **"ce problème est trop sensible au tirage précis
 (automate + demande) pour qu'une taille nominale garantisse une comparaison
-significative REF vs GNN/V1CLD"**. Cohérent avec la calibration par bissection
+significative REF vs GNN/DLD"**. Cohérent avec la calibration par bissection
 qui doit chercher activement une fenêtre de difficulté plutôt que la laisser
 émerger naturellement de la taille (cf. section "pourquoi calibrer" plus haut).

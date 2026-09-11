@@ -2,7 +2,7 @@
 bnb_solver.py — Wrapper ctypes pour solve_zeta_batch (C++).
 
 Compile bnb_solver.cpp automatiquement si le .so est absent ou plus récent.
-Utilisé par lagrangian_v1ld() dans train_gnn_v1ld.py.
+Utilisé par lagrangian_sld() dans train_gnn_sld.py.
 """
 
 import ctypes

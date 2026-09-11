@@ -1,7 +1,7 @@
 #!/bin/bash
 # build_ssp_binaries_once.sh — Compile UNE SEULE FOIS, de façon sérialisée,
 # les deux binaires utilisés par la campagne test_paper/ssp/rorqual/ssp
-# (test_gnn_v1cld_bab, test_gnn_v1cld_bab_batched) dans solver_bab/build_gpu_ssp.
+# (test_gnn_dld_bab, test_gnn_dld_bab_batched) dans solver_bab/build_gpu_ssp.
 #
 # Existe suite à l'incident du 2026-08-28 : run_ref_array_ssp.sh et
 # run_gnn_batched_array_ssp.sh faisaient CHACUN leur propre "cmake --build"
@@ -10,7 +10,7 @@
 # nœuds GPU), leurs builds concurrents se marchent dessus : un lien qui
 # échoue dans une tâche supprime le binaire qu'une autre tâche vient de
 # produire avec succès. Résultat mesuré : 20 tâches FAILED d'un coup
-# (erreur de liaison "undefined reference to solve_v1ld/solve_v1cld") + 1
+# (erreur de liaison "undefined reference to solve_sld/solve_dld") + 1
 # résultat dégradé (root_bound_value manquant, binaire disparu sous le run
 # auxiliaire en cours d'exécution).
 #
@@ -44,15 +44,15 @@ cmake -S "$REPO/solver_bab" -B "$BAB_BUILD" \
     -DGNN_DEVICE=cuda
 
 echo ""
-echo "=== Compilation test_gnn_v1cld_bab_batched ==="
-cmake --build "$BAB_BUILD" --target test_gnn_v1cld_bab_batched -j4
+echo "=== Compilation test_gnn_dld_bab_batched ==="
+cmake --build "$BAB_BUILD" --target test_gnn_dld_bab_batched -j4
 
 echo ""
-echo "=== Compilation test_gnn_v1cld_bab ==="
-cmake --build "$BAB_BUILD" --target test_gnn_v1cld_bab -j4
+echo "=== Compilation test_gnn_dld_bab ==="
+cmake --build "$BAB_BUILD" --target test_gnn_dld_bab -j4
 
-BIN_BATCHED="$BAB_BUILD/test_gnn_v1cld_bab_batched"
-BIN_SEQ="$BAB_BUILD/test_gnn_v1cld_bab"
+BIN_BATCHED="$BAB_BUILD/test_gnn_dld_bab_batched"
+BIN_SEQ="$BAB_BUILD/test_gnn_dld_bab"
 
 echo ""
 if [[ -x "$BIN_BATCHED" && -x "$BIN_SEQ" ]]; then

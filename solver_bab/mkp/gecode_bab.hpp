@@ -1,6 +1,6 @@
 #pragma once
 /*
- * gecode_bab_v1ld.hpp — B&B Gecode pour le CCMKP avec borne V1LD à chaque nœud.
+ * gecode_bab_sld.hpp — B&B Gecode pour le CCMKP avec borne SLD à chaque nœud.
  *
  * ═══════════════════════════════════════════════════════════════════════════════
  * ARCHITECTURE GÉNÉRALE
@@ -8,13 +8,13 @@
  *
  * Ce fichier combine deux mécanismes :
  *
- *  1. Un modèle CP Gecode (MKPSpaceV1LD, hérite de IntMaximizeSpace) :
+ *  1. Un modèle CP Gecode (MKPSpaceSLD, hérite de IntMaximizeSpace) :
  *     - encode le CCMKP comme un programme en variables entières/booléennes
  *     - Gecode pilote l'arbre B&B, gère la propagation et le clonage des espaces
  *
  *  2. Un bornage Lagrangien (méthode more()) :
  *     - appelé après chaque décision de branchement
- *     - calcule v1LD sur le sous-problème résiduel (variables encore libres)
+ *     - calcule SLD sur le sous-problème résiduel (variables encore libres)
  *     - poste la contrainte  obj ≤ ⌈UB⌉  dans l'espace courant
  *     - Gecode utilise cette borne pour élaguer les branches non-prometteuses
  *
@@ -36,7 +36,7 @@
  * Ceci évite le recours à une constante Big-M et donne une propagation CP exacte.
  *
  * ═══════════════════════════════════════════════════════════════════════════════
- * BORNE V1LD AUX NŒUDS DE L'ARBRE
+ * BORNE SLD AUX NŒUDS DE L'ARBRE
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Après chaque fixation de variable x_k = v par le brancher, more() est appelé :
@@ -46,8 +46,8 @@
  *   1. Profit fixé       : fp = Σ_{k ∈ F₁} c_k
  *   2. Capacité réduite  : b̃_i[j] = b_i[j] − Σ_{k ∈ F₁} A_i[j][k]
  *   3. Sous-problème résiduel sur L (avec b̃_i, A restreinte aux colonnes L)
- *   4. v1LD* = solve_v1ld(sous-problème, T_node itérations)
- *   5. UB = fp + v1LD*
+ *   4. SLD* = solve_sld(sous-problème, T_node itérations)
+ *   5. UB = fp + SLD*
  *   6. On poste  obj ≤ ⌈UB × SCALE⌉  (SCALE=1000 : conversion float→int Gecode)
  *
  * Si UB ≤ meilleure solution connue (incumbent), Gecode détecte la contradiction
@@ -64,13 +64,13 @@
  * le même MKPSharedData en lecture seule, qui vit dans la fonction appelante.
  */
 
-#include "../../solver_generic/v1ld_base.hpp"
-#include "../../solver_generic/v1ld_solver.hpp"
-#include "../../solver_generic/v1cld_base.hpp"
-#include "../../solver_generic/v1cld_solver.hpp"
+#include "../../solver_generic/sld_base.hpp"
+#include "../../solver_generic/sld_solver.hpp"
+#include "../../solver_generic/dld_base.hpp"
+#include "../../solver_generic/dld_solver.hpp"
 #include "../../solver_generic/mkp/mkp_problem_bnb.hpp"
 #include "../../solver_generic/mkp/mkp_problem_bnb_surrogate.hpp"
-#include "../../solver_generic/mkp/mkp_cld_problem.hpp"
+#include "../../solver_generic/mkp/mkp_dld_problem.hpp"
 #include "gnn_bound_backend.hpp"
 
 #include <gecode/int.hh>
@@ -90,9 +90,9 @@
 using namespace Gecode;
 
 // ── Mode de calcul de la borne aux nœuds ─────────────────────────────────────
-// V1LD  : ζᵢ résolu exactement (B&B multi-dim)   → borne serrée, lent
-// V1CLD : ζᵢⱼ LP-relax 1D (min sur j)             → borne lâche, rapide
-// GNN   : borne one-shot prédite par un GNN pré-entraîné (gnn_v1ld_client.hpp)
+// SLD  : ζᵢ résolu exactement (B&B multi-dim)   → borne serrée, lent
+// DLD : ζᵢⱼ LP-relax 1D (min sur j)             → borne lâche, rapide
+// GNN   : borne one-shot prédite par un GNN pré-entraîné (gnn_sld_client.hpp)
 //         — pas de descente de sous-gradient, un seul aller-retour vers un
 //         process Python persistant par appel more() — À CHAQUE nœud.
 // GNN_ROOT : même inférence GNN one-shot, mais UNE SEULE FOIS (au premier
@@ -101,35 +101,35 @@ using namespace Gecode;
 //         Teste si la seule borne de racine, sans la repayer à chaque nœud,
 //         suffit à élaguer utilement l'arbre (compromis coût/qualité opposé
 //         au mode GNN plein).
-// REF   : squelette V1LD NU — même classe, même heuristique de branchement
+// REF   : squelette SLD NU — même classe, même heuristique de branchement
 //         (ordre RATIO), même amorçage d'incumbent glouton, même moteur DFS
 //         maison (solve_gecode_bab_mkp) — mais more() ne reconstruit AUCUN
 //         sous-problème et ne calcule/poste AUCUNE borne. Sert de référence
 //         pour comparer "Gecode base" (BAB natif Gecode, ordre de déclaration,
-//         pas d'incumbent initial) à V1LD/V1CLD à heuristique/moteur FIXÉS :
+//         pas d'incumbent initial) à SLD/DLD à heuristique/moteur FIXÉS :
 //         l'écart base vs REF isole l'effet du branchement+incumbent+moteur ;
-//         l'écart REF vs V1LD/V1CLD isole l'effet de la borne seule.
-// GNN_ROOT_V1CLD : symétrique de GNN_ROOT, mais avec le checkpoint/backend
-// V1CLD (ζ DP 1D exact) au lieu de V1LD — cf. GNNV1CLDSdEditNative
-// (gnn_v1cld_sd_edit_native.hpp), adaptateur mono-nœud autour de
-// GNNV1CLDSdEditNativeBatched (query_batch, taille de batch 1). Ajouté pour
-// obtenir une borne "forward GNN root-only" V1CLD comparable à GNN_ROOT côté
-// V1LD (cf. mémoire project_ccmkp_trillium_migration / test_paper_trillium
+//         l'écart REF vs SLD/DLD isole l'effet de la borne seule.
+// GNN_ROOT_DLD : symétrique de GNN_ROOT, mais avec le checkpoint/backend
+// DLD (ζ DP 1D exact) au lieu de SLD — cf. GNNDLDSdEditNative
+// (gnn_dld_sd_edit_native.hpp), adaptateur mono-nœud autour de
+// GNNDLDSdEditNativeBatched (query_batch, taille de batch 1). Ajouté pour
+// obtenir une borne "forward GNN root-only" DLD comparable à GNN_ROOT côté
+// SLD (cf. mémoire project_ccmkp_trillium_migration / test_paper_trillium
 // GNN-vs-sous-gradient).
-enum class BoundMode { V1LD, V1CLD, GNN, GNN_ROOT, GNN_ROOT_V1CLD, REF };
+enum class BoundMode { SLD, DLD, GNN, GNN_ROOT, GNN_ROOT_DLD, REF };
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MKPSharedData — données partagées entre tous les espaces Gecode
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // Contient les données du problème sous deux formes :
-//   - flottantes (c, p, A, b) : utilisées par V1LD (more())
+//   - flottantes (c, p, A, b) : utilisées par SLD (more())
 //   - entières  (c_int, A_int, b_int, SCALE=1000) : utilisées par la formulation
 //     CP Gecode, qui n'accepte que des entiers dans les contraintes linéaires.
 //
 // Durée de vie : doit rester valide pendant toute la recherche B&B.
-// Ce struct est construit dans solve_gecode_v1ld_mkp et son adresse est transmise
-// à la racine MKPSpaceV1LD, puis copiée (comme pointeur) à chaque clone.
+// Ce struct est construit dans solve_gecode_sld_mkp et son adresse est transmise
+// à la racine MKPSpaceSLD, puis copiée (comme pointeur) à chaque clone.
 
 struct MKPSharedData {
     int    n;         // nombre de variables de décision (items)
@@ -172,15 +172,15 @@ struct MKPSharedData {
     std::vector<std::vector<int>>              b_int;   // b × SCALE (floor, conservatif)
     int obj_max;   // borne supérieure sur obj (= Σ max(0, c_int[k])), pour le domaine de obj
 
-    // ── Options V1LD pour les appels dans more() ──────────────────────────────
-    BoundMode bound_mode = BoundMode::V1LD;  // V1LD (exact) ou V1CLD (LP-relax)
-    // Mode V1LD uniquement (ignoré en V1CLD) : méthode utilisée pour ζ_i à
+    // ── Options SLD pour les appels dans more() ──────────────────────────────
+    BoundMode bound_mode = BoundMode::SLD;  // SLD (exact) ou DLD (LP-relax)
+    // Mode SLD uniquement (ignoré en DLD) : méthode utilisée pour ζ_i à
     // chaque nœud. false (défaut) = MKPProblemBnB (Dantzig + LP-relax par
     // dimension, méthode historique/prod). true = MKPProblemBnBSurrogate
     // (même ζ_i exact, borne de branchement surrogate — cf.
     // mkp_surrogate_bound.hpp) : comparaison expérimentale demandée pour
     // évaluer si une borne de branchement plus serrée réduit le temps ζ_i
-    // dans le VRAI B&B (pas seulement le benchmark isolé bench_v1ld_subproblems).
+    // dans le VRAI B&B (pas seulement le benchmark isolé bench_sld_subproblems).
     bool   use_surrogate_zeta = false;
     int    T_root     = 200;   // itérations sous-gradient au premier appel (λ=0, cold start)
     int    T_node     = 30;    // itérations sous-gradient aux nœuds suivants (warm-start)
@@ -191,12 +191,12 @@ struct MKPSharedData {
     // (is_first) dès que la borne courante atteint cette valeur ABSOLUE
     // (même échelle que root_bound_value, i.e. fp + L1 — PAS juste L1) —
     // typiquement la borne déjà obtenue par un forward GNN root-only
-    // (gnn_root/gnn_root_v1cld), passée via la variable d'env
+    // (gnn_root/gnn_root_dld), passée via la variable d'env
     // GNN_COMPARE_BOUND (lue dans solve_gecode_bab_mkp, gecode_bab.cpp).
     // 1e18 (défaut) = désactivé (jamais atteint, comportement historique
     // inchangé). Ignoré aux nœuds suivants (T_node) — la comparaison au GNN
     // ne concerne que la racine. Ajouté suite au constat que le sous-gradient
-    // V1LD/ζ exact devient ~500x plus cher par itération à n=25 qu'à n=15
+    // SLD/ζ exact devient ~500x plus cher par itération à n=25 qu'à n=15
     // (cf. mémoire project_ccmkp_trillium_migration) : courir jusqu'à
     // convergence complète ou jusqu'à T_root=3000 est impraticable, alors
     // qu'on ne cherche qu'à savoir à QUELLE itération le sous-gradient
@@ -213,7 +213,7 @@ struct MKPSharedData {
 
     // ── Compteurs de statistiques (mutable : modifiés dans more() via const*) ─
     //
-    // ub_tightened : nombre de fois où la borne V1LD est strictement inférieure
+    // ub_tightened : nombre de fois où la borne SLD est strictement inférieure
     //   au domaine courant de obj (ub_int < obj.max()).  Mesure l'utilité de
     //   calculer la borne aux nœuds internes vs seulement à la racine.
     //
@@ -224,7 +224,7 @@ struct MKPSharedData {
     //   Les autres fails (engine.statistics().fail − fails_from_bound) sont
     //   imputables à la propagation CP (réification, chance constraint, etc.).
     // ── Incumbent initial (optionnel) ─────────────────────────────────────────
-    // Si > 0, on poste obj >= initial_lb_int dans le constructeur de MKPSpaceV1LD.
+    // Si > 0, on poste obj >= initial_lb_int dans le constructeur de MKPSpaceSLD.
     // Cela évite d'explorer des branches dont l'objectif ne peut dépasser une
     // solution déjà connue (typiquement : la solution gloutonne).
     int initial_lb_int = 0;
@@ -240,16 +240,16 @@ struct MKPSharedData {
     mutable double t_bound_total_s   = 0.0; // temps total cumulé dans tous les appels more()
 
     // ── Diagnostic : coût du clonage d'espace (Space::copy(), un par nœud) ────
-    // Isole le temps passé à copier NOTRE état (lambda_v1ld/lambda_v1cld/b_res/
+    // Isole le temps passé à copier NOTRE état (lambda_sld/lambda_dld/b_res/
     // fixed_mask), distinct du reste de t_bab_pure_s (clonage natif Gecode des
     // BoolVarArray/propagateurs + propagation CP + dispatch du BoundBrancher).
-    mutable int64_t clone_count      = 0;   // nb d'appels à MKPSpaceV1LD::copy()
+    mutable int64_t clone_count      = 0;   // nb d'appels à MKPSpaceSLD::copy()
     mutable double  t_clone_state_s  = 0.0; // temps cumulé à copier lambda/b_res/fixed_mask
     mutable double  t_clone_total_s  = 0.0; // temps cumulé du clonage COMPLET (base Gecode + notre état)
 
     // ── Statistiques par profondeur ───────────────────────────────────────────
     // Objectif : détecter une profondeur au-delà de laquelle calculer la borne
-    // (V1LD/V1CLD/GNN) ne provoque plus aucun fail, pour évaluer si on peut
+    // (SLD/DLD/GNN) ne provoque plus aucun fail, pour évaluer si on peut
     // arrêter de la recalculer/poster passé ce seuil (compromis coût/qualité).
     // Indexées par depth = nombre de variables x fixées au moment de l'appel
     // more() (0 = racine, n = feuille) — même définition que /*depth=*/ dans
@@ -265,13 +265,13 @@ struct MKPSharedData {
     // sans fail mais où la borne est déjà quasi gratuite n'a pas le même
     // verdict qu'une depth sans fail où elle reste coûteuse (ex. GNN : le
     // coût par nœud ne décroît pas nécessairement avec la profondeur comme le
-    // fait celui de V1LD/V1CLD, dont le sous-problème résiduel rétrécit).
+    // fait celui de SLD/DLD, dont le sous-problème résiduel rétrécit).
     mutable std::vector<double>  t_bound_by_depth;
 
     // ── Mode GNN (bound_mode == BoundMode::GNN) ───────────────────────────────
     // gnn_client n'est PAS possédé ici (durée de vie gérée par
     // solve_gecode_bab_mkp, qui outlive tous les clones d'espace — même
-    // patron que ce struct lui-même vis-à-vis des MKPSpaceV1LD). Interface
+    // patron que ce struct lui-même vis-à-vis des MKPSpaceSLD). Interface
     // commune aux deux backends (IPC ou natif LibTorch) — cf. gnn_bound_backend.hpp.
     GNNBoundBackend* gnn_client = nullptr;
     // Seuil de profondeur relative (depth/n) en dessous duquel l'appel GNN est
@@ -322,7 +322,7 @@ struct MKPSharedData {
     // façon tués. gecode_bab_gnn_batched.cpp appliquait déjà ce découplage
     // (SimpleBrancher::commit() ne calcule aucune borne) mais jamais
     // reporté ici. Défaut false : AUCUN changement de comportement pour les
-    // autres consommateurs de MKPSpaceV1LD/BoundBrancher (gecode_bab_bucketed.cpp,
+    // autres consommateurs de MKPSpaceSLD/BoundBrancher (gecode_bab_bucketed.cpp,
     // gecode_bab_collect.cpp), qui gardent le fusionnement commit()→more()
     // historique. Mis à true uniquement dans solve_gecode_bab_mkp.
     bool defer_bound_to_driver = false;
@@ -397,29 +397,29 @@ struct MKPSharedData {
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// GecodeV1LDResult — statistiques de résolution retournées à l'appelant
+// GecodeSLDResult — statistiques de résolution retournées à l'appelant
 // ═════════════════════════════════════════════════════════════════════════════
 
-struct GecodeV1LDResult {
+struct GecodeSLDResult {
     double      objective;     // valeur objective de la meilleure solution (non scalée)
     bool        optimal;       // true si optimalité prouvée (arbre épuisé)
     bool        feasible;      // true si au moins une solution faisable trouvée
     double      greedy_value;  // valeur de la solution gloutonne utilisée comme incumbent initial
-    double      best_open_ub;  // meilleure UB V1LD vue sur un nœud non-élagué (≥ objective si optimal)
+    double      best_open_ub;  // meilleure UB SLD vue sur un nœud non-élagué (≥ objective si optimal)
     double      solve_time_s;  // temps total de résolution (construction + B&B)
     int64_t     nodes;              // nœuds totaux Gecode (engine.statistics().node)
     int64_t     fails;              // nœuds échoués (propagation + borne, au total)
-    int64_t     fails_from_bound;   // sous-ensemble : fails causés directement par notre borne V1LD
+    int64_t     fails_from_bound;   // sous-ensemble : fails causés directement par notre borne SLD
     int64_t     fails_from_cp;      // estimé = fails − fails_from_bound (propagation CP native)
     int64_t     incumbent_improvements; // nombre de fois où une meilleure solution a été trouvée
     int64_t     more_calls;           // appels totaux à more() (= branches explorées avec commit OK)
-    int64_t     ub_tightened;         // sous-ensemble : borne V1LD a réellement réduit obj.max()
+    int64_t     ub_tightened;         // sous-ensemble : borne SLD a réellement réduit obj.max()
     int64_t     depth;                // profondeur maximale atteinte dans l'arbre
     double      root_bound_time_s;    // temps du premier appel à more() (cold start, T_root iters)
     double      root_bound_value = 0.0; // valeur de la borne au premier appel more() (racine) ; 0.0 en mode REF
     double      t_bound_total_s;      // temps cumulé dans tous les appels more()
     double      t_bab_pure_s;         // temps B&B pur = t_total - t_bound_total
-    int64_t     clone_count = 0;      // nb d'appels à MKPSpaceV1LD::copy() (~1/nœud, parfois plus)
+    int64_t     clone_count = 0;      // nb d'appels à MKPSpaceSLD::copy() (~1/nœud, parfois plus)
     double      t_clone_state_s = 0.0; // sous-ensemble de t_bab_pure_s : copie de lambda/b_res/fixed_mask
     double      t_clone_total_s = 0.0; // sous-ensemble de t_bab_pure_s : clonage complet (base + état)
     std::string status;               // "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT"
@@ -450,14 +450,14 @@ struct GecodeV1LDResult {
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MKPSpaceV1LD — espace de recherche Gecode pour le CCMKP + borne V1LD
+// MKPSpaceSLD — espace de recherche Gecode pour le CCMKP + borne SLD
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // Hérite de IntMaximizeSpace : Gecode pilote automatiquement la maximisation
 // (il maintient une borne inférieure = meilleure solution, et élaguer les
 // branches dont l'objectif ne peut dépasser cette borne).
 
-class MKPSpaceV1LD : public IntMaximizeSpace {
+class MKPSpaceSLD : public IntMaximizeSpace {
 public:
     BoolVarArray x;    // x[k] ∈ {0,1} : item k sélectionné ou non
     BoolVarArray z;    // z[i] ∈ {0,1} : scénario i satisfait ou non
@@ -467,11 +467,11 @@ public:
     const MKPSharedData* data;
 
     // Multiplicateurs Lagrangiens — un seul est utilisé selon bound_mode.
-    // V1LD  : lambda_v1ld  (N × n)      — hérité/mis à jour par more() en mode V1LD
-    // V1CLD : lambda_v1cld (N × m × n)  — hérité/mis à jour par more() en mode V1CLD
+    // SLD  : lambda_sld  (N × n)      — hérité/mis à jour par more() en mode SLD
+    // DLD : lambda_dld (N × m × n)  — hérité/mis à jour par more() en mode DLD
     // L'autre champ reste vide (Vec2d{} ou Vec3d{}) → aucun surcoût mémoire.
-    Vec2d lambda_v1ld;    // (N, n)      — mode V1LD
-    Vec3d lambda_v1cld;   // (N, m, n)   — mode V1CLD
+    Vec2d lambda_sld;    // (N, n)      — mode SLD
+    Vec3d lambda_dld;   // (N, m, n)   — mode DLD
 
     // false → premier appel : cold start (T_root iters) ; true → warm-start (T_node iters)
     bool lambda_warmed = false;
@@ -493,14 +493,14 @@ public:
     double               fp_running = 0.0;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // BoundBrancher — brancher custom qui déclenche le bornage V1LD
+    // BoundBrancher — brancher custom qui déclenche le bornage SLD
     // ─────────────────────────────────────────────────────────────────────────
     //
     // Gecode utilise des "branchers" pour choisir quelle variable instancier et
     // avec quelle valeur. Ce brancher gère uniquement les variables x[k].
     //
     // Rôle principal : après chaque commit (fixation de x[k] = v), appeler
-    // more() sur l'espace pour calculer la borne V1LD et la poster comme
+    // more() sur l'espace pour calculer la borne SLD et la poster comme
     // contrainte obj ≤ ⌈UB⌉.
     //
     // Si la contrainte est contradictoire (borne < meilleure solution connue),
@@ -563,7 +563,7 @@ public:
         // et on prend le premier non encore fixé — identique à bab_mkp.cpp.
         // Valeur 1 essayée en premier (favorise la sélection des items rentables).
         Choice* choice(Space& home) override {
-            const auto& order = static_cast<MKPSpaceV1LD&>(home).data->branch_order;
+            const auto& order = static_cast<MKPSpaceSLD&>(home).data->branch_order;
             for (int k : order)
                 if (!vars[k].assigned())
                     return new PosVal(*this, k, 1);
@@ -583,7 +583,7 @@ public:
         // a == 1 : branche alternative → x[pos] = 0
         //
         // Après la fixation, si la propagation n'a pas échoué, on appelle more()
-        // pour calculer la borne V1LD sur le sous-problème résiduel et la poster
+        // pour calculer la borne SLD sur le sous-problème résiduel et la poster
         // comme contrainte sur obj. Si cette contrainte est infaisable (borne < LB),
         // Gecode détecte ES_FAILED lors de la propagation suivante.
         //
@@ -603,7 +603,7 @@ public:
             ExecStatus es = me_failed(vars[pos].eq(home, val))
                             ? ES_FAILED : ES_OK;
 
-            auto& sp = static_cast<MKPSpaceV1LD&>(home);
+            auto& sp = static_cast<MKPSpaceSLD&>(home);
             // Ne calcule la borne que si la fixation est cohérente avec les contraintes
             if (es == ES_OK && !sp.data->defer_bound_to_driver)
                 sp.more();
@@ -630,14 +630,14 @@ public:
     //
     // Les coefficients entiers (c_int, A_int, b_int) viennent de MKPSharedData.
 
-    explicit MKPSpaceV1LD(const MKPSharedData* d)
+    explicit MKPSpaceSLD(const MKPSharedData* d)
         : x(*this, d->n, 0, 1),
           z(*this, d->N, 0, 1),
           obj(*this, 0, d->obj_max),
           data(d),
-          lambda_v1ld (d->bound_mode == BoundMode::V1LD
+          lambda_sld (d->bound_mode == BoundMode::SLD
                        ? Vec2d(d->N, Vec1d(d->n, 0.0)) : Vec2d{}),
-          lambda_v1cld(d->bound_mode == BoundMode::V1CLD
+          lambda_dld(d->bound_mode == BoundMode::DLD
                        ? Vec3d(d->N, Vec2d(d->m, Vec1d(d->n, 0.0))) : Vec3d{}),
           b_res(d->b),                    // racine : aucun item fixé, capacité pleine
           fixed_mask(d->n, 0)
@@ -702,7 +702,7 @@ public:
     // branches indépendamment. Ce constructeur copie les variables CP dans le
     // nouvel espace home (via update()) et recopie le pointeur data (pas les données).
 
-    MKPSpaceV1LD(MKPSpaceV1LD& s)
+    MKPSpaceSLD(MKPSpaceSLD& s)
         : IntMaximizeSpace(s), data(s.data),
           lambda_warmed(s.lambda_warmed)
     {
@@ -716,8 +716,8 @@ public:
         // clonage Gecode natif).
         using Clock = std::chrono::steady_clock;
         auto t_clone_start = Clock::now();
-        lambda_v1ld  = s.lambda_v1ld;
-        lambda_v1cld = s.lambda_v1cld;
+        lambda_sld  = s.lambda_sld;
+        lambda_dld = s.lambda_dld;
         b_res        = s.b_res;
         fixed_mask   = s.fixed_mask;
         fp_running   = s.fp_running;
@@ -737,7 +737,7 @@ public:
     Space* copy() override {
         using Clock = std::chrono::steady_clock;
         auto t0 = Clock::now();
-        Space* s = new MKPSpaceV1LD(*this);
+        Space* s = new MKPSpaceSLD(*this);
         data->t_clone_total_s += std::chrono::duration<double>(Clock::now() - t0).count();
         return s;
     }
@@ -748,7 +748,7 @@ public:
     IntVar  cost()  const override { return obj; }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // more() — calcul de la borne V1LD et propagation dans l'espace courant
+    // more() — calcul de la borne SLD et propagation dans l'espace courant
     // ─────────────────────────────────────────────────────────────────────────
     //
     // Appelé par BoundBrancher::commit() après chaque fixation d'une variable x[k].
@@ -760,8 +760,8 @@ public:
     //        c_free   = c restreint à L
     //        A_free   = A restreint aux colonnes L
     //        b_adj[i][j] = b[i][j] - Σ_{k ∈ F₁} A[i][j][k]   (capacité résiduelle)
-    //   4. Appeler solve_v1ld() sur ce sous-problème pour obtenir v1LD*.
-    //   5. UB = fp + v1LD*
+    //   4. Appeler solve_sld() sur ce sous-problème pour obtenir SLD*.
+    //   5. UB = fp + SLD*
     //   6. Poster  obj ≤ ⌈UB × SCALE⌉  dans l'espace courant.
     //      Si cette contrainte est contradictoire avec le domaine actuel de obj,
     //      la propagation Gecode détectera un échec → branche élagée.
@@ -780,8 +780,8 @@ public:
     // BoundBrancher::commit() (defer_bound_to_driver == false).
 
     bool more() {
-        // Mode REF : squelette V1LD nu — même heuristique de branchement, même
-        // incumbent glouton, même moteur DFS que V1LD/V1CLD, mais AUCUNE
+        // Mode REF : squelette SLD nu — même heuristique de branchement, même
+        // incumbent glouton, même moteur DFS que SLD/DLD, mais AUCUNE
         // reconstruction de sous-problème et AUCUNE borne calculée/postée.
         // Court-circuit avant même le scan des variables (Étape 1) : ce scan
         // et la mise à jour incrémentale de b_res/fp_running n'existent que
@@ -791,14 +791,14 @@ public:
             return false;
         }
 
-        // Mode GNN_ROOT / GNN_ROOT_V1CLD : la borne n'est calculée qu'UNE FOIS
+        // Mode GNN_ROOT / GNN_ROOT_DLD : la borne n'est calculée qu'UNE FOIS
         // par lignée (au premier appel more(), cf. lambda_warmed hérité par
         // clonage — même notion de "premier appel" que is_first plus bas /
         // T_root vs T_node). Une fois lambda_warmed==true, on se comporte
         // comme REF : même court-circuit AVANT le scan des variables (Étape 1),
         // qui n'a d'utilité que pour alimenter un calcul de borne ultérieur.
         if ((data->bound_mode == BoundMode::GNN_ROOT ||
-             data->bound_mode == BoundMode::GNN_ROOT_V1CLD) && lambda_warmed) {
+             data->bound_mode == BoundMode::GNN_ROOT_DLD) && lambda_warmed) {
             data->more_calls++;
             return false;
         }
@@ -815,7 +815,7 @@ public:
         // reconstruction complète de b_adj/fp depuis data->b/data->c à chaque
         // nœud (coût O(N·m·n) auparavant, resommé sur TOUT fixed_one) par un
         // coût O(N·m·|delta|) — b_res/fixed_mask sont clonés d'un nœud à l'autre
-        // comme lambda_v1ld/lambda_v1cld, donc portent déjà l'état du parent.
+        // comme lambda_sld/lambda_dld, donc portent déjà l'état du parent.
         //
         // x_mask sert uniquement au mode GNN (0=fixé_0, 1=fixé_1, 2=libre, sur
         // l'instance COMPLÈTE) — coût O(n) négligeable, on le construit toujours
@@ -862,7 +862,7 @@ public:
 
         // ── Mode GNN / GNN_ROOT : borne one-shot, AVANT de construire le
         // sous-problème réduit (Étape 3) — celui-ci ne sert qu'aux modes
-        // V1LD/V1CLD, le construire quand même ici gaspillerait
+        // SLD/DLD, le construire quand même ici gaspillerait
         // O(N·m·n_free) par nœud pour rien. Un seul aller-retour vers le
         // serveur Python persistant (data->gnn_client), pas de warm-start ni
         // de raffinement itératif : la borne prédite est postée telle
@@ -907,7 +907,7 @@ public:
         }
 
         if (data->bound_mode == BoundMode::GNN || data->bound_mode == BoundMode::GNN_ROOT ||
-            data->bound_mode == BoundMode::GNN_ROOT_V1CLD) {
+            data->bound_mode == BoundMode::GNN_ROOT_DLD) {
             using Clock = std::chrono::steady_clock;
             auto t_bound_start = Clock::now();
             const bool is_first = !lambda_warmed;
@@ -919,7 +919,7 @@ public:
             // x_mask (cf. revue niveau 1 point B : coût O(N·m·|F1|) redondant,
             // croissant avec la profondeur, qui expliquait pourquoi le coût
             // par nœud du mode GNN ne décroissait pas avec la profondeur
-            // contrairement à V1LD/V1CLD).
+            // contrairement à SLD/DLD).
             double ub_relative = data->gnn_client->query(x_mask, b_res, fp, /*depth=*/depth, timing);
             double ub = fp + ub_relative;
 
@@ -970,13 +970,13 @@ public:
             return posted;
         }
 
-        // Étape 3 : construire le sous-problème réduit (flottant, pour V1LD/V1CLD).
+        // Étape 3 : construire le sous-problème réduit (flottant, pour SLD/DLD).
         // Chrono démarré ICI (avant la reconstruction O(N·m·n_free) de A_free/b_adj),
-        // pas seulement autour de solve_v1ld/solve_v1cld : cette reconstruction est un
+        // pas seulement autour de solve_sld/solve_dld : cette reconstruction est un
         // coût du calcul de la borne (l'équivalent existe côté GNN, dans build_graph
         // sur le serveur Python, et EST compté dans t_gnn_graph_build_s) — l'ancien
         // placement du chrono (juste avant l'étape 4) la comptait à tort dans
-        // t_bab_pure_s, gonflant artificiellement le "B&B pur" de V1LD/V1CLD par
+        // t_bab_pure_s, gonflant artificiellement le "B&B pur" de SLD/DLD par
         // rapport au mode GNN.
         using Clock = std::chrono::steady_clock;
         auto t_bound_start = Clock::now();
@@ -987,7 +987,7 @@ public:
 
         // Sous-matrice A restreinte aux variables libres — reste O(N·m·n_free) :
         // pas encore résolu par l'incrément 1 (nécessiterait de passer un accès
-        // indexé à solve_v1ld/solve_v1cld plutôt qu'un tableau pré-empaqueté ;
+        // indexé à solve_sld/solve_dld plutôt qu'un tableau pré-empaqueté ;
         // laissé pour un incrément séparé si le gain ci-dessous ne suffit pas).
         Vec3d A_free(N, Vec2d(m, Vec1d(n_free, 0.0)));
         for (int i = 0; i < N; ++i)
@@ -1022,18 +1022,18 @@ public:
 
         double ub;  // borne supérieure retournée par le solveur Lagrangien choisi
 
-        if (data->bound_mode == BoundMode::V1LD) {
-            // ── Mode V1LD : ζᵢ exact (B&B multi-dim), λ ∈ R^{N×n} ─────────────
+        if (data->bound_mode == BoundMode::SLD) {
+            // ── Mode SLD : ζᵢ exact (B&B multi-dim), λ ∈ R^{N×n} ─────────────
             Vec2d lambda_init(N, Vec1d(n_free, 0.0));
             if (!is_first)
                 for (int i = 0; i < N; ++i)
                     for (int kf = 0; kf < n_free; ++kf)
-                        lambda_init[i][kf] = lambda_v1ld[i][free_vars[kf]];
+                        lambda_init[i][kf] = lambda_sld[i][free_vars[kf]];
 
             // Choix de la méthode ζ_i, cf. doc sur MKPSharedData::use_surrogate_zeta.
-            // solve_v1ld() dispatche via V1LDProblem& (virtuel) : polymorphisme
+            // solve_sld() dispatche via SLDProblem& (virtuel) : polymorphisme
             // requis pour choisir le type concret à l'exécution sans dupliquer
-            // l'appel solve_v1ld ci-dessous.
+            // l'appel solve_sld ci-dessous.
             std::unique_ptr<MKPProblem> prob_ptr = data->use_surrogate_zeta
                 ? std::unique_ptr<MKPProblem>(std::make_unique<MKPProblemBnBSurrogate>(
                       c_free, data->p, A_free, b_adj, data->epsilon))
@@ -1049,16 +1049,16 @@ public:
             // target_relative : cf. doc MKPSharedData::gnn_compare_bound —
             // uniquement à la racine (is_first), converti de l'échelle
             // absolue (fp + L1) vers l'échelle relative (L1 seule) attendue
-            // par solve_v1ld. Désactivé (1e18) aux nœuds suivants.
+            // par solve_sld. Désactivé (1e18) aux nœuds suivants.
             double target_relative = is_first ? (data->gnn_compare_bound - fp) : 1e18;
-            V1LDResult res = solve_v1ld(*prob_ptr, T_iters, is_first ? 1 : 0, false, -1.0,
+            SLDResult res = solve_sld(*prob_ptr, T_iters, is_first ? 1 : 0, false, -1.0,
                                         node_tol, data->tol_window, -1e18,
                                         lambda_init, -1.0, 50, target_relative);
 
             for (int i = 0; i < N; ++i)
                 for (int kf = 0; kf < n_free; ++kf)
-                    lambda_v1ld[i][free_vars[kf]] = res.lambda_star[i][kf];
-            ub = fp + res.v1LD_star;
+                    lambda_sld[i][free_vars[kf]] = res.lambda_star[i][kf];
+            ub = fp + res.SLD_star;
 
             // Trace opt-in (ROOT_SUBGRAD_TRACE=1) : best_upper(t) = fp + min
             // des L1 vus jusqu'à l'itération t — même quantité que
@@ -1070,39 +1070,39 @@ public:
                 double running_best = 1e18;
                 for (size_t t = 0; t < res.convergence.size(); ++t) {
                     running_best = std::min(running_best, res.convergence[t]);
-                    std::fprintf(stderr, "SUBGRAD_TRACE,v1ld,%zu,%.6f\n",
+                    std::fprintf(stderr, "SUBGRAD_TRACE,sld,%zu,%.6f\n",
                                  t + 1, fp + running_best);
                 }
             }
 
         } else {
-            // ── Mode V1CLD : ζᵢⱼ LP-relax 1D, λ ∈ R^{N×m×n} ───────────────────
+            // ── Mode DLD : ζᵢⱼ LP-relax 1D, λ ∈ R^{N×m×n} ───────────────────
             Vec3d lambda_init(N, Vec2d(m, Vec1d(n_free, 0.0)));
             if (!is_first)
                 for (int i = 0; i < N; ++i)
                     for (int j = 0; j < m; ++j)
                         for (int kf = 0; kf < n_free; ++kf)
-                            lambda_init[i][j][kf] = lambda_v1cld[i][j][free_vars[kf]];
+                            lambda_init[i][j][kf] = lambda_dld[i][j][free_vars[kf]];
 
-            MKPCLDProblem prob(c_free, data->p, A_free, b_adj, data->epsilon);
-            // log_interval, target_relative : cf. commentaires symétriques côté V1LD ci-dessus.
+            MKPDLDProblem prob(c_free, data->p, A_free, b_adj, data->epsilon);
+            // log_interval, target_relative : cf. commentaires symétriques côté SLD ci-dessus.
             double target_relative = is_first ? (data->gnn_compare_bound - fp) : 1e18;
-            V1CLDResult res = solve_v1cld(prob, T_iters, is_first ? 1 : 0, false, -1.0,
+            DLDResult res = solve_dld(prob, T_iters, is_first ? 1 : 0, false, -1.0,
                                           node_tol, data->tol_window, -1e18,
                                           lambda_init, target_relative);
 
             for (int i = 0; i < N; ++i)
                 for (int j = 0; j < m; ++j)
                     for (int kf = 0; kf < n_free; ++kf)
-                        lambda_v1cld[i][j][free_vars[kf]] = res.lambda_star[i][j][kf];
-            ub = fp + res.v1CLD_star;
+                        lambda_dld[i][j][free_vars[kf]] = res.lambda_star[i][j][kf];
+            ub = fp + res.DLD_star;
 
-            // Trace opt-in : cf. commentaire symétrique côté V1LD ci-dessus.
+            // Trace opt-in : cf. commentaire symétrique côté SLD ci-dessus.
             if (is_first && std::getenv("ROOT_SUBGRAD_TRACE")) {
                 double running_best = 1e18;
                 for (size_t t = 0; t < res.convergence.size(); ++t) {
                     running_best = std::min(running_best, res.convergence[t]);
-                    std::fprintf(stderr, "SUBGRAD_TRACE,v1cld,%zu,%.6f\n",
+                    std::fprintf(stderr, "SUBGRAD_TRACE,dld,%zu,%.6f\n",
                                  t + 1, fp + running_best);
                 }
             }
@@ -1158,7 +1158,7 @@ std::pair<double, std::vector<int8_t>> greedy_mkp(
     double epsilon);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// solve_gecode_v1ld_mkp — point d'entrée public
+// solve_gecode_sld_mkp — point d'entrée public
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // Construit MKPSharedData, crée l'espace racine, lance le moteur BAB<> de Gecode
@@ -1169,14 +1169,14 @@ std::pair<double, std::vector<int8_t>> greedy_mkp(
 //   epsilon   : niveau de risque ε ∈ (0,1)
 //   c, p, A, b : données du problème (float)
 //   time_lim  : limite de temps en secondes (-1 = illimité)
-//   T_node    : itérations de sous-gradient V1LD par nœud (défaut 30)
+//   T_node    : itérations de sous-gradient SLD par nœud (défaut 30)
 
 // gnn_checkpoint_path : requis si bound_mode == BoundMode::GNN (chemin vers le
 //   .pt) — lève std::invalid_argument si vide dans ce mode.
-// gnn_backend : "ipc" (défaut, GNNV1LDClient — process Python persistant,
-//   gnn/gnn_inference_server.py) ou "native" (GNNV1LDNative — build_graph +
-//   forward + lagrangian_v1ld réimplémentés en C++/LibTorch, en-process,
-//   cf. gnn_v1ld_native.hpp). Même checkpoint, mêmes résultats (validés à
+// gnn_backend : "ipc" (défaut, GNNSLDClient — process Python persistant,
+//   gnn/gnn_inference_server.py) ou "native" (GNNSLDNative — build_graph +
+//   forward + lagrangian_sld réimplémentés en C++/LibTorch, en-process,
+//   cf. gnn_sld_native.hpp). Même checkpoint, mêmes résultats (validés à
 //   ~1e-4 près) — "native" élimine l'IPC par nœud au prix d'un chargement
 //   ponctuel du modèle (fork python one-shot, mis en cache) au démarrage.
 // gnn_python_exe / gnn_server_script : ignorés en mode "native" ; permettent
@@ -1192,17 +1192,17 @@ std::pair<double, std::vector<int8_t>> greedy_mkp(
 // gnn_max_depth_frac : symétrique de gnn_min_depth_frac — saute l'appel GNN
 //   dès que depth/n > gnn_max_depth_frac (cf. doc sur
 //   MKPSharedData::gnn_max_depth_frac). Défaut 1.0 = jamais sauté.
-// use_surrogate_zeta : mode V1LD uniquement — cf. doc sur
+// use_surrogate_zeta : mode SLD uniquement — cf. doc sur
 //   MKPSharedData::use_surrogate_zeta. Défaut false = comportement historique
 //   (MKPProblemBnB).
-GecodeV1LDResult solve_gecode_bab_mkp(
+GecodeSLDResult solve_gecode_bab_mkp(
     int n, int m, int N, double epsilon,
     const Vec1d& c, const Vec1d& p,
     const Vec3d& A, const Vec2d& b,
     double    time_lim      = 300.0,
     int       T_root        = 200,
     int       T_node        = 30,
-    BoundMode bound_mode    = BoundMode::V1LD,
+    BoundMode bound_mode    = BoundMode::SLD,
     bool      patience_mode = false,
     double    patience_tol  = 0.1,
     std::string gnn_checkpoint_path = "",

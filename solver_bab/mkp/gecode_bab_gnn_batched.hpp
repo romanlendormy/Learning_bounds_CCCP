@@ -2,13 +2,13 @@
 /*
  * gecode_bab_gnn_batched.hpp — Étape 2e du plan de batching : intègre
  * GNNSdEditNativeBatched dans le vrai moteur B&B, en cassant la fusion
- * commit()→more()→status() de MKPSpaceV1LD (gecode_bab.hpp) — ici, commit()
+ * commit()→more()→status() de MKPSpaceSLD (gecode_bab.hpp) — ici, commit()
  * fixe juste la variable, AUCUN calcul de borne. Le calcul est différé,
  * regroupé par bucket de n_g (même mécanisme que gecode_bab_bucketed.cpp,
  * Étape 1 — risque algorithmique déjà mesuré comme faible), et effectué en
  * UN SEUL appel GNNSdEditNativeBatched::query_batch() par bucket flush.
  *
- * Nouvelle classe MKPSpaceGNNBatched (PAS une réutilisation de MKPSpaceV1LD).
+ * Nouvelle classe MKPSpaceGNNBatched (PAS une réutilisation de MKPSpaceSLD).
  * b_res EST hérité incrémentalement depuis le 2026-07-18 (cf.
  * MKPSpaceGNNBatched::b_res/apply_item_fixed) — avant cette date, le mode GNN
  * n'en avait pas besoin car GNNSdEditNativeBatched::query_batch()
@@ -36,7 +36,7 @@ class MKPSpaceGNNBatched : public IntMaximizeSpace {
 public:
     BoolVarArray x, z;
     IntVar       obj;
-    const MKPSharedData* data;   // read-only, non cloné (même patron que MKPSpaceV1LD)
+    const MKPSharedData* data;   // read-only, non cloné (même patron que MKPSpaceSLD)
 
     // Capacités résiduelles, HÉRITÉES du parent au clonage (copie simple,
     // O(N*m)) puis mises à jour incrémentalement par apply_item_fixed()
@@ -115,7 +115,7 @@ public:
         }
     };
 
-    // ── Constructeur racine — IDENTIQUE au modèle CP de MKPSpaceV1LD (channel,
+    // ── Constructeur racine — IDENTIQUE au modèle CP de MKPSpaceSLD (channel,
     // réification z_i=1→A_i x≤b_i, chance constraint, objectif, incumbent
     // initial) — cf. gecode_bab.hpp:515-577, juste SimpleBrancher au lieu de
     // BoundBrancher. ─────────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ public:
 // ═════════════════════════════════════════════════════════════════════════════
 // Résultat + point d'entrée
 // ═════════════════════════════════════════════════════════════════════════════
-struct GNNBatchedBabResult : public GecodeV1LDResult {
+struct GNNBatchedBabResult : public GecodeSLDResult {
     int     K                         = 1;
     int64_t n_bucket_flushes          = 0;
     double  mean_bucket_fill_at_flush = 0.0;

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-parse_result_ssp.py — Parse la sortie stdout de test_gnn_v1cld_bab (mode ref)
-ou de run_gnn_batched_array_ssp.sh (test_gnn_v1cld_bab_batched + run
-auxiliaire test_gnn_v1cld_bab mode gnn pour le gap racine) et extrait les
+parse_result_ssp.py — Parse la sortie stdout de test_gnn_dld_bab (mode ref)
+ou de run_gnn_batched_array_ssp.sh (test_gnn_dld_bab_batched + run
+auxiliaire test_gnn_dld_bab mode gnn pour le gap racine) et extrait les
 métriques pour la campagne test_paper/ssp/rorqual/ssp.
 
-Format de sortie différent de test_paper/mkp/trillium/v1ld/parse_result.py (MKP) : binaires
+Format de sortie différent de test_paper/mkp/trillium/sld/parse_result.py (MKP) : binaires
 différents ("[test] ...", "[gnn_timing] ..."), pas de mode string ni de
 chaînes "Statut :"/"Valeur optimale :" côté SSP.
 
 Pour le mode gnn_batched, le log contient DEUX sections séparées par le
 marqueur "=== SECTION: root_gap_sidecar ===" (posé par
-run_gnn_batched_array_ssp.sh) : la section principale (test_gnn_v1cld_bab_batched,
+run_gnn_batched_array_ssp.sh) : la section principale (test_gnn_dld_bab_batched,
 K=8) fournit status/objective/nodes/solve_time_s/répartition du temps ; la
-section sidecar (test_gnn_v1cld_bab mode gnn, run court 60s) fournit
+section sidecar (test_gnn_dld_bab mode gnn, run court 60s) fournit
 UNIQUEMENT root_bound_value (borne réelle au nœud racine, capturée une seule
 fois au tout premier nœud -- cf. gecode_bab_ssp.hpp "is_first"). Le
 status/nodes/solve_time_s de la section sidecar sont ignorés (run tronqué à
