@@ -58,3 +58,47 @@ if(GNN_DEVICE STREQUAL "cuda")
         OUTPUT_NAME nvshmem_host SOVERSION 3
         LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/nvshmem_stub/nvshmem_stub.map")
 endif()
+
+# ══ MKP ═══════════════════════════════════════════════════════════════════════
+# mkp_bab_core : moteur B&B Gecode (REF / SLD / DLD / GNN mono-nœud), moteurs
+# batchés (gnn_batched SLD et DLD) et backends GNN natifs (TorchScript).
+add_library(mkp_bab_core STATIC
+    mkp/gecode_bab.cpp
+    mkp/gecode_bab_gnn_batched.cpp
+    mkp/gecode_bab_dld_gnn_batched.cpp
+    mkp/gnn_sd_edit_native.cpp
+    mkp/gnn_sd_edit_native_batched.cpp
+    mkp/gnn_dld_sd_edit_native.cpp
+    mkp/gnn_dld_sd_edit_native_batched.cpp
+    mkp/bnb_solver.cpp                      # ζ_i (B&B exact / surrogate), appelé par les backends GNN
+)
+target_include_directories(mkp_bab_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/mkp
+    ${GECODE_INCLUDE_DIRS}
+    ${LIBTORCH_INCLUDE_DIRS}
+)
+target_compile_definitions(mkp_bab_core PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
+target_compile_options(mkp_bab_core PRIVATE -O3 -march=native)
+target_link_libraries(mkp_bab_core PUBLIC
+    sld_generic_core ortools::ortools OpenMP::OpenMP_CXX
+    ${LIBTORCH_LINK_FLAGS} ${GECODE_LINK_FLAGS}
+)
+
+# bab_mkp_gecode : CLI principale (modes ref, sld, dld, gnn, gnn_root, gnn_root_dld,
+# gnn_batched, gnn_batched_dld ; GNN_ZERO_LAMBDA=1 -> ablation λ = 0 en gnn_batched).
+add_executable(bab_mkp_gecode mkp/main_gecode.cpp)
+target_compile_options(bab_mkp_gecode PRIVATE -O3 -march=native)
+target_link_libraries(bab_mkp_gecode PRIVATE mkp_bab_core)
+
+# bab_mkp_gecode_dld_gnn_batched : CLI dédiée à la campagne DLD + GNN batché.
+add_executable(bab_mkp_gecode_dld_gnn_batched mkp/main_bab_dld_gnn_batched.cpp)
+target_compile_options(bab_mkp_gecode_dld_gnn_batched PRIVATE -O3 -march=native)
+target_link_libraries(bab_mkp_gecode_dld_gnn_batched PRIVATE mkp_bab_core)
+
+# bab_mkp_gecode_base_collect : B&B Gecode de base + collecte des nœuds (données GNN).
+add_executable(bab_mkp_gecode_base_collect
+    ../gecode_base/main_collect_gecode_base.cpp
+    ../gecode_base/collect_gecode_base.cpp
+)
+target_compile_options(bab_mkp_gecode_base_collect PRIVATE -O3 -march=native)
+target_link_libraries(bab_mkp_gecode_base_collect PRIVATE mkp_bab_core)
