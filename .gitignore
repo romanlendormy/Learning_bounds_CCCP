@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Compiled artifacts
+*.so
+**/build/
+**/build*/
+
+# Third-party libraries (see README, "Dependencies")
+external/
+
+# Local tooling
+.claude/
+.vscode/
+.DS_Store
+
+# Run outputs (logs, raw per-run outputs, intermediate checkpoints)
+logs/
+slurm_*.out
+slurm_*.err
+runs/
+
+# Large datasets, recreated by the generation / collection scripts
+data/knapsack/datasets-song-github/
+data/knapsack/datasets-pisinger/
+data/knapsack/pisinger/
