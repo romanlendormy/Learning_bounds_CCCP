@@ -21,9 +21,9 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 │   ├── mkp/              #   CCMKP: SLD / DLD bounds, GNN inference (LibTorch)
 │   ├── ccpo/             #   CCPO: ζ subproblems (exact enumeration + SCIP), exact presolve, GNN inference
 │   └── nvshmem_stub/     #   stub library needed by LibTorch 2.13 CUDA on clusters without NVSHMEM
-├── data/knapsack/        # CCMKP benchmark instances
+├── data/knapsack/        # CCMKP instance generator (Pisinger instances + Song et al. scenarios)
 ├── ccpo_stochastic/      # CCPO instance generator (scenarios, discretisation, writers) + tests
-├── collect/              # collection of B&B nodes used as GNN training data
+├── collect/              # collection of B&B nodes used as GNN training data (MKP, CCPO)
 ├── gnn_sd_edit/          # GNN for CCMKP (SLD / DLD), training and TorchScript export
 ├── gnn_ccpo/             # GNN for CCPO, training, TorchScript export, validation
 └── test_paper/           # experimental campaigns of the paper (scripts + aggregated results)
