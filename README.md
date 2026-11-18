@@ -53,7 +53,15 @@ external/gecode/           # Gecode 6.2.0 install prefix
 external/ortools/          # OR-Tools 9.6.2534 install prefix
 external/libtorch/         # LibTorch 2.13.0 CPU
 external/libtorch-cuda/    # LibTorch 2.13.0 + CUDA 12.6
-external/nvshmem_stub/lib/ # built from solver_bab/nvshmem_stub/
+```
+
+## Building
+
+```bash
+source env/modules_trillium.sh
+module load cuda/12.6 cudnn/9.10.0.56      # only for a CUDA build
+cmake -S . -B build -DGNN_DEVICE=cuda      # or cpu (default)
+cmake --build build -j
 ```
 
 ## Environment (Trillium)

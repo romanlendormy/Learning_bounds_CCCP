@@ -1,0 +1,23 @@
+NVSHMEM {
+  global:
+    nvshmem_free;
+    nvshmem_malloc;
+    nvshmem_ptr;
+    nvshmem_team_n_pes;
+    nvshmem_team_split_strided;
+    nvshmemid_hostlib_finalize;
+    nvshmemid_hostlib_init_attr;
+    nvshmemid_init_status;
+    nvshmem_info_get_version;
+    nvshmemx_alltoallmem_on_stream;
+    nvshmemx_broadcastmem_on_stream;
+    nvshmemx_cumodule_init;
+    nvshmemx_getmem_on_stream;
+    nvshmemx_get_uniqueid;
+    nvshmemx_mc_ptr;
+    nvshmemx_putmem_on_stream;
+    nvshmemx_putmem_signal_on_stream;
+    nvshmemx_set_attr_uniqueid_args;
+    nvshmemx_signal_wait_until_on_stream;
+  local: *;
+};
