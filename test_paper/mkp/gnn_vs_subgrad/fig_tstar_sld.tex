@@ -1,0 +1,58 @@
+% fig_tstar_sld.tex -- MKP, SLD: subgradient iterations t* needed to beat the GNN root bound, and time of these t* iterations
+% vs. one GNN bound call. Medians over 10 instances per (n, N); generated from latex_data/time_vs_tstar_sld.csv
+% (extract_time_vs_tstar.py). Preamble: \usepackage{pgfplots} \usepgfplotslibrary{groupplots} \pgfplotsset{compat=1.16}
+% Usage in the paper: \input{fig_tstar_sld}
+\pgfplotstableread{
+n  N     tstar  tsub      tgnn
+15 100   16.5   0.03475   0.002985
+15 500   20     0.1942    0.01221
+15 1000  58     0.9757    0.0249
+20 100   20.5   0.2625    0.01328
+20 500   20.5   0.6345    0.05749
+20 1000  60     2.886     0.1172
+25 100   14     1.565     0.09308
+25 500   13     2.407     0.4131
+25 1000  33.5   6.722     0.8262
+30 100   6      4.417     0.6154
+30 500   9      9.976     2.424
+30 1000  22     22.66     4.55
+}\tstarsld
+\tikzset{tstarSG/.style={line width=1pt, mark=*, mark size=1.6pt},
+         tstarGNN/.style={line width=1pt, dashed, mark=square*, mark size=1.4pt}}
+\definecolor{c100}{HTML}{6DA7EC}
+\definecolor{c500}{HTML}{2A78D6}
+\definecolor{c1000}{HTML}{104281}
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{groupplot}[
+    group style={group size=2 by 1, horizontal sep=1.45cm},
+    width=0.5\linewidth, height=4.4cm, scale only axis=false,
+    every axis/.append style={font=\footnotesize}, xlabel={$n$}, xtick={15,20,25,30}, xmin=13.5, xmax=31.5,
+    grid=major, grid style={gray!20}, axis line style={gray!60}, tick style={gray!60},
+    unbounded coords=discard,
+  ]
+  \nextgroupplot[ylabel={Iterations $t^\star$}, ymin=0, ymax=70,
+    legend to name=legtstarN, legend columns=3, legend style={draw=none, font=\footnotesize, column sep=6pt}]
+    \addplot+[tstarSG, color=c100, mark options={fill=c100}, x filter/.expression={\thisrow{N}==100 ? x : nan}] table[x=n, y=tstar] {\tstarsld};
+    \addplot+[tstarSG, color=c500, mark options={fill=c500}, x filter/.expression={\thisrow{N}==500 ? x : nan}] table[x=n, y=tstar] {\tstarsld};
+    \addplot+[tstarSG, color=c1000, mark options={fill=c1000}, x filter/.expression={\thisrow{N}==1000 ? x : nan}] table[x=n, y=tstar] {\tstarsld};
+    \legend{$N=100$, $N=500$, $N=1000$}
+  \nextgroupplot[ymode=log, ylabel={Time (s)}, ymin=1e-3, ymax=60,
+    legend to name=legtstarM, legend columns=2, legend style={draw=none, font=\footnotesize, column sep=6pt}]
+    \addlegendimage{tstarSG, color=black, mark options={fill=black}}
+    \addlegendimage{tstarGNN, color=black, mark options={fill=black}}
+    \addplot+[tstarSG, color=c100, mark options={fill=c100}, x filter/.expression={\thisrow{N}==100 ? x : nan}] table[x=n, y=tsub] {\tstarsld};
+    \addplot+[tstarSG, color=c500, mark options={fill=c500}, x filter/.expression={\thisrow{N}==500 ? x : nan}] table[x=n, y=tsub] {\tstarsld};
+    \addplot+[tstarSG, color=c1000, mark options={fill=c1000}, x filter/.expression={\thisrow{N}==1000 ? x : nan}] table[x=n, y=tsub] {\tstarsld};
+    \addplot+[tstarGNN, color=c100, mark options={fill=c100}, x filter/.expression={\thisrow{N}==100 ? x : nan}] table[x=n, y=tgnn] {\tstarsld};
+    \addplot+[tstarGNN, color=c500, mark options={fill=c500}, x filter/.expression={\thisrow{N}==500 ? x : nan}] table[x=n, y=tgnn] {\tstarsld};
+    \addplot+[tstarGNN, color=c1000, mark options={fill=c1000}, x filter/.expression={\thisrow{N}==1000 ? x : nan}] table[x=n, y=tgnn] {\tstarsld};
+    \legend{Subgradient ($t^\star$ iterations), GNN (one call)}
+\end{groupplot}
+\end{tikzpicture}\\[2pt]
+\pgfplotslegendfromname{legtstarN}\\
+\pgfplotslegendfromname{legtstarM}
+\caption{MKP, SLD. Left: number of subgradient iterations $t^\star$ (cold start at the root) needed to reach the bound inferred by the GNN in a single forward pass. Right: wall-clock time of these $t^\star$ iterations (solid) versus one GNN bound call (dashed; graph construction, forward pass and evaluation of $L(\lambda)$, TorchScript warm-up excluded). Medians over 10 instances per $(n, N)$; 1 H100 GPU, 4 cores. For $n=15$, the subgradient time is $t^\star/t_{\max}$ times the time of a full run of $t_{\max}$ iterations.}
+\label{fig:tstar_sld}
+\end{figure}

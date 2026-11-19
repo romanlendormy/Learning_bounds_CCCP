@@ -1,0 +1,70 @@
+% fig_time_vs_tstar.tex — MKP : itérations de sous-gradient t* pour battre la borne GNN root-only (haut) et
+% temps de ces t* itérations vs temps d'un appel de borne GNN (bas), médianes sur 10 instances par (n, N).
+% Données : latex_data/time_vs_tstar_{sld,dld}.csv (extract_time_vs_tstar.py). Marqueur creux = médiane minorante (censure à droite :
+% plus de la moitié des instances n'atteignent pas la borne GNN en T_root=300 itérations).
+% Compilation autonome : pdflatex fig_time_vs_tstar.tex (depuis ce dossier). Pour le papier : copier le contenu de tikzpicture.
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{pgfplots}
+\usepackage{pgfplotstable}
+\usepgfplotslibrary{groupplots}
+\usetikzlibrary{calc}
+\pgfplotsset{compat=newest}
+\definecolor{cN100}{HTML}{6DA7EC}
+\definecolor{cN500}{HTML}{2A78D6}
+\definecolor{cN1000}{HTML}{104281}
+\pgfplotsset{
+  every axis/.append style={font=\small, grid=major, grid style={gray!20}, axis line style={gray!60}, tick style={gray!60},
+                            xtick={15,20,25,30}, xmin=13.5, xmax=31.5},
+  sg/.style={line width=1.2pt, mark=*, mark size=2pt},
+  gnn/.style={line width=1.2pt, dashed, mark=square*, mark size=1.8pt},
+  lb/.style={only marks, mark=o, mark size=3.6pt, line width=1pt, forget plot},
+}
+% \plotN{fichier}{colonne y}{N}{couleur}{style}{colonne minorant ou vide}
+\newcommand{\plotN}[6]{%
+  \addplot+[#5, color=#4, mark options={fill=#4}, unbounded coords=discard,
+    x filter/.expression={\thisrow{N}==#3 ? x : nan}] table[col sep=comma, x=n, y=#2] {#1};
+  \if\relax\detokenize{#6}\relax\else
+  \addplot+[lb, color=#4, mark options={fill=white},
+    x filter/.expression={(\thisrow{N}==#3 && \thisrow{#6}==1) ? x : nan}] table[col sep=comma, x=n, y=#2] {#1};
+  \fi}
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[group style={group size=2 by 2, horizontal sep=1.6cm, vertical sep=1.5cm},
+                  width=7.2cm, height=5.2cm]
+% ---- t* ----
+\nextgroupplot[title={SLD}, ylabel={itérations $t^\star$}, ymin=0, ymax=320]
+  \plotN{latex_data/time_vs_tstar_sld.csv}{t_star_median}{100}{cN100}{sg}{t_star_lb}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{t_star_median}{500}{cN500}{sg}{t_star_lb}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{t_star_median}{1000}{cN1000}{sg}{t_star_lb}
+\nextgroupplot[title={DLD}, ymin=0, ymax=320,
+               legend to name=legN, legend columns=3, legend style={draw=none, font=\small, column sep=8pt}]
+  \plotN{latex_data/time_vs_tstar_dld.csv}{t_star_median}{100}{cN100}{sg}{t_star_lb}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{t_star_median}{500}{cN500}{sg}{t_star_lb}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{t_star_median}{1000}{cN1000}{sg}{t_star_lb}
+  \legend{$N=100$, $N=500$, $N=1000$}
+% ---- temps ----
+\nextgroupplot[ymode=log, xlabel={$n$}, ylabel={temps (s)}, ymin=1e-3, ymax=60]
+  \plotN{latex_data/time_vs_tstar_sld.csv}{subgrad_time_median_s}{100}{cN100}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{subgrad_time_median_s}{500}{cN500}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{subgrad_time_median_s}{1000}{cN1000}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{gnn_time_median_s}{100}{cN100}{gnn}{}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{gnn_time_median_s}{500}{cN500}{gnn}{}
+  \plotN{latex_data/time_vs_tstar_sld.csv}{gnn_time_median_s}{1000}{cN1000}{gnn}{}
+\nextgroupplot[ymode=log, xlabel={$n$}, ymin=1e-3, ymax=60,
+               legend to name=legM, legend columns=2, legend style={draw=none, font=\small, column sep=8pt}]
+  \addlegendimage{sg, color=black, mark options={fill=black}}
+  \addlegendimage{gnn, color=black, mark options={fill=black}}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{subgrad_time_median_s}{100}{cN100}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{subgrad_time_median_s}{500}{cN500}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{subgrad_time_median_s}{1000}{cN1000}{sg}{subgrad_time_lb}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{gnn_time_median_s}{100}{cN100}{gnn}{}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{gnn_time_median_s}{500}{cN500}{gnn}{}
+  \plotN{latex_data/time_vs_tstar_dld.csv}{gnn_time_median_s}{1000}{cN1000}{gnn}{}
+  \legend{sous-gradient ($t^\star$ itérations), borne GNN (1 appel)}
+\end{groupplot}
+\node[anchor=south] at ($(group c1r1.north)!0.5!(group c2r1.north) + (0,0.75cm)$) {\pgfplotslegendfromname{legN}};
+\node[anchor=north] (lm) at ($(group c1r2.south)!0.5!(group c2r2.south) + (0,-0.95cm)$) {\pgfplotslegendfromname{legM}};
+\node[anchor=north, font=\small] (lc) at ($(lm.south) + (0.25cm,-0.05cm)$) {médiane minorante (censure, $T_{\mathrm{root}}=300$)};
+\node[circle, draw, inner sep=1.8pt, line width=0.9pt, anchor=east] at ($(lc.west) + (-0.1cm,0)$) {};
+\end{tikzpicture}
+\end{document}

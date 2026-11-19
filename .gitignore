@@ -7,9 +7,11 @@ __pycache__/
 *.so
 **/build/
 **/build*/
+/build
 
 # Third-party libraries (see README, "Dependencies")
 external/
+/external
 
 # Local tooling
 .claude/
@@ -29,3 +31,4 @@ data/knapsack/datasets-song-github/
 data/knapsack/datasets-pisinger/
 data/knapsack/pisinger/
 data/train*/
+test_paper/mkp/instances/
