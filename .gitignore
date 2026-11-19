@@ -21,6 +21,8 @@ logs/
 slurm_*.out
 slurm_*.err
 runs/
+# Export TorchScript des modèles MKP, régénéré automatiquement par le B&B
+models/mkp/**/*scripted*.pt
 
 # Large datasets, recreated by the generation / collection scripts
 data/knapsack/datasets-song-github/

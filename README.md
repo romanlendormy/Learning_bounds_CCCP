@@ -15,8 +15,8 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 ```
 .
 ├── env/                  # environment: module list, GPU runtime paths (Trillium / Alliance clusters)
-├── solver_generic/       # SLD / DLD subgradient solvers (C++ core + Python bindings), MKP subproblems
-├── gecode_base/          # Gecode model shared by the B&B solvers
+├── solver_generic/       # SLD / DLD subgradient solvers (C++), MKP subproblems
+├── gecode_base/          # node collection from the plain MKP Gecode B&B (GNN training data)
 ├── solver_bab/           # Gecode branch-and-bound with Lagrangian bounds
 │   ├── mkp/              #   CCMKP: SLD / DLD bounds, GNN inference (LibTorch)
 │   ├── ccpo/             #   CCPO: ζ subproblems (exact enumeration + SCIP), exact presolve, GNN inference
@@ -25,7 +25,10 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 ├── ccpo_stochastic/      # CCPO instance generator (scenarios, discretisation, writers) + tests
 ├── collect/              # collection of B&B nodes used as GNN training data (MKP, CCPO)
 ├── gnn_sd_edit/          # GNN for CCMKP (SLD / DLD), training and TorchScript export
+│                         #   (B&B binaries must run from the repository root: they call
+│                         #    gnn_sd_edit/*_scriptable*.py to export a checkpoint the first time)
 ├── gnn_ccpo/             # GNN for CCPO, training, TorchScript export, validation
+├── models/               # trained models used in the paper (mkp/sld, mkp/dld, ccpo)
 └── test_paper/           # experimental campaigns of the paper (scripts + aggregated results)
     ├── mkp/
     └── ccpo/
