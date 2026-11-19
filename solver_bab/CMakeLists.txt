@@ -138,6 +138,13 @@ add_executable(bab_ccpo_collect ccpo/main_collect_gecode_ccpo.cpp)
 target_compile_options(bab_ccpo_collect PRIVATE -O3 -march=native)
 target_link_libraries(bab_ccpo_collect PRIVATE ccpo_bab_core)
 
+# ccpo_graph.so : graphe du GNN CCPO construit en C++, appelé depuis Python (ctypes) pour
+# vérifier la correspondance avec gnn_ccpo/ccpo_graph.py (gnn_ccpo/test_correspondence.py).
+add_library(ccpo_graph SHARED ccpo/ccpo_graph_bind.cpp)
+target_include_directories(ccpo_graph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ccpo)
+target_compile_options(ccpo_graph PRIVATE -O3 -march=native)
+set_target_properties(ccpo_graph PROPERTIES PREFIX "" SUFFIX ".so" CXX_EXTENSIONS OFF)
+
 # Même dialecte que la compilation de la campagne CCPO (-std=c++17, sans extensions GNU).
 set_target_properties(bab_ccpo bab_ccpo_rootcmp bab_ccpo_collect ccpo_bab_core ccpo_gnn_native
     PROPERTIES CXX_EXTENSIONS OFF)
