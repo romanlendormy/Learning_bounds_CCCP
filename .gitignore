@@ -32,3 +32,4 @@ data/knapsack/datasets-pisinger/
 data/knapsack/pisinger/
 data/train*/
 test_paper/mkp/instances/
+test_paper/ccpo/instances/
