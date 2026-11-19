@@ -15,11 +15,12 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 ```
 .
 ├── env/                  # environment: module list, GPU runtime paths (Trillium / Alliance clusters)
-├── solver_generic/       # SLD / DLD subgradient solvers (C++), MKP subproblems
+├── solver_generic/       # SLD / DLD subgradient solvers (C++), MKP subproblems,
+│                         #   CCPO Lagrangian bound (θ / ζ subproblems, exact presolve, SCIP for ζ)
 ├── gecode_base/          # node collection from the plain MKP Gecode B&B (GNN training data)
 ├── solver_bab/           # Gecode branch-and-bound with Lagrangian bounds
 │   ├── mkp/              #   CCMKP: SLD / DLD bounds, GNN inference (LibTorch)
-│   ├── ccpo/             #   CCPO: ζ subproblems (exact enumeration + SCIP), exact presolve, GNN inference
+│   ├── ccpo/             #   CCPO: REF / SLD / FEAS B&B, batched LD / LD0, GNN inference (LibTorch)
 │   └── nvshmem_stub/     #   stub library needed by LibTorch 2.13 CUDA on clusters without NVSHMEM
 ├── data/knapsack/        # CCMKP instance generator (Pisinger instances + Song et al. scenarios)
 ├── ccpo_stochastic/      # CCPO instance generator (scenarios, discretisation, writers) + tests
@@ -42,7 +43,7 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 | CMake | ≥ 3.27 | build |
 | Gecode | 6.2.0 | B&B solvers |
 | OR-Tools | 9.6.2534 | `solver_generic` |
-| SCIP | 9.0.0 | CCPO ζ subproblems |
+| SCIP | 9.0.0 (shared library, module `scipoptsuite/9.0.0`) | CCPO ζ subproblems |
 | LibTorch | 2.13.0 (CPU, or CUDA 12.6) | GNN inference inside the B&B |
 | CUDA / cuDNN | 12.6 / 9.10 | GPU inference |
 | Python | 3.11 | training, data collection, analysis |

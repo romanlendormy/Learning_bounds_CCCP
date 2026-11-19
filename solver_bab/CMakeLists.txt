@@ -102,3 +102,42 @@ add_executable(bab_mkp_gecode_base_collect
 )
 target_compile_options(bab_mkp_gecode_base_collect PRIVATE -O3 -march=native)
 target_link_libraries(bab_mkp_gecode_base_collect PRIVATE mkp_bab_core)
+
+# ══ CCPO ══════════════════════════════════════════════════════════════════════
+# ccpo_bab_core : B&B Gecode CCPO (REF / SLD / FEAS, cf. gecode_bab_ccpo.hpp) et
+# driver batché (GNN ou λ = 0, cf. gecode_bab_ccpo_gnn_batched.hpp).
+add_library(ccpo_bab_core STATIC
+    ccpo/gecode_bab_ccpo.cpp
+    ccpo/gecode_bab_ccpo_gnn_batched.cpp
+)
+target_include_directories(ccpo_bab_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ccpo ${GECODE_INCLUDE_DIRS})
+target_compile_options(ccpo_bab_core PRIVATE -O3 -march=native)
+target_link_libraries(ccpo_bab_core PUBLIC ccpo_bound OpenMP::OpenMP_CXX ${GECODE_LINK_FLAGS})
+
+# ccpo_gnn_native : inférence du GNN CCPO (LibTorch, graphe construit en C++).
+# Compilé sans les en-têtes Gecode (cf. ccpo_gnn_backend_batch.hpp).
+add_library(ccpo_gnn_native STATIC ccpo/gnn_ccpo_native_batched.cpp)
+target_include_directories(ccpo_gnn_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ccpo PRIVATE ${LIBTORCH_INCLUDE_DIRS})
+target_compile_options(ccpo_gnn_native PRIVATE -O3 -march=native)
+target_link_libraries(ccpo_gnn_native PUBLIC OpenMP::OpenMP_CXX ${LIBTORCH_LINK_FLAGS})
+
+# bab_ccpo : CLI de la campagne CCPO (modes ref, sld, feas, gnn_zero, gnn).
+add_executable(bab_ccpo ccpo/main_gecode_ccpo.cpp)
+target_compile_definitions(bab_ccpo PRIVATE CCPO_WITH_TORCH CCPO_WITH_SCIP)
+target_compile_options(bab_ccpo PRIVATE -O3 -march=native)
+target_link_libraries(bab_ccpo PRIVATE ccpo_bab_core ccpo_gnn_native ccpo_scip_zeta)
+
+# bab_ccpo_rootcmp : borne à la racine, un forward GNN vs sous-gradient (t*).
+add_executable(bab_ccpo_rootcmp ccpo/main_root_compare_ccpo.cpp)
+target_compile_definitions(bab_ccpo_rootcmp PRIVATE CCPO_WITH_TORCH CCPO_WITH_SCIP)
+target_compile_options(bab_ccpo_rootcmp PRIVATE -O3 -march=native)
+target_link_libraries(bab_ccpo_rootcmp PRIVATE ccpo_bab_core ccpo_gnn_native ccpo_scip_zeta)
+
+# bab_ccpo_collect : B&B REF + collecte des nœuds (données d'entraînement du GNN CCPO).
+add_executable(bab_ccpo_collect ccpo/main_collect_gecode_ccpo.cpp)
+target_compile_options(bab_ccpo_collect PRIVATE -O3 -march=native)
+target_link_libraries(bab_ccpo_collect PRIVATE ccpo_bab_core)
+
+# Même dialecte que la compilation de la campagne CCPO (-std=c++17, sans extensions GNU).
+set_target_properties(bab_ccpo bab_ccpo_rootcmp bab_ccpo_collect ccpo_bab_core ccpo_gnn_native
+    PROPERTIES CXX_EXTENSIONS OFF)
