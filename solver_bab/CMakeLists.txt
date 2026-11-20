@@ -5,8 +5,10 @@
 # ── Gecode ────────────────────────────────────────────────────────────────────
 set(GECODE_PREFIX "${EXTERNAL_DIR}/gecode" CACHE PATH "Préfixe d'installation Gecode 6.2")
 set(GECODE_INCLUDE_DIRS "${GECODE_PREFIX}/include")
+# --disable-new-dtags : RPATH plutôt que RUNPATH, pour que les dépendances indirectes de Gecode
+# (libgecodeminimodel -> libgecodefloat, libgecodeset) soient trouvées sans LD_LIBRARY_PATH.
 set(GECODE_LINK_FLAGS
-    -L${GECODE_PREFIX}/lib -Wl,-rpath,${GECODE_PREFIX}/lib
+    -L${GECODE_PREFIX}/lib -Wl,-rpath,${GECODE_PREFIX}/lib -Wl,--disable-new-dtags
     -lgecodeint -lgecodekernel -lgecodesupport -lgecodesearch -lgecodeminimodel
 )
 
