@@ -3,7 +3,7 @@
  * gnn_dld_sd_edit_native_batched.hpp — Équivalent DLD de
  * GNNSdEditNativeBatched (gnn_sd_edit_native_batched.hpp) : B nœuds B&B
  * bornés en un seul forward GNN, mais avec λ[i,j,k] (3D, un axe contrainte
- * de plus) au lieu de λ[i,k] (2D) — cf. gnn_sd_edit/train_DLD_sd_edit.py.
+ * de plus) au lieu de λ[i,k] (2D) — cf. gnn/mkp/train_DLD_sd_edit.py.
  *
  * Fichier séparé de gnn_sd_edit_native_batched.hpp/.cpp — AUCUNE modification
  * du backend SLD de production (même convention que le reste du repo).

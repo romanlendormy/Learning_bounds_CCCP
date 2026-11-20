@@ -16,4 +16,4 @@
 - **Selection**: epoch 57 has the best mean VAL improvement of L(λ_GNN) over L(0) on feasible nodes
   (10.45 % mean, 6.81 % median).
 - **Export check**: `validate_export_ckpt.py` on 12 real graphs gives max |TorchScript − eager| = 9.5e-7.
-- **Reproduction**: see `gnn_ccpo/README.md` (pipeline steps 1–7, launcher `gnn_ccpo/run_train_ccpo.sh`).
+- **Reproduction**: see `gnn/ccpo/README.md` (pipeline steps 1–7, launcher `gnn/ccpo/run_train_ccpo.sh`).

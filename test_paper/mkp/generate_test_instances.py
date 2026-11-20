@@ -5,7 +5,7 @@ Génère les 120 instances CC-MKP de test de l'article (communes aux campagnes S
 
 Grille : n ∈ {15, 20, 25, 30} × N ∈ {100, 500, 1000}, m = 5, graines 43..52
 (10 instances par cellule). Même générateur que la collecte d'entraînement
-(collect/collect_large_base_samples.py::generate_song_tempfile : instance Pisinger
+(generators/mkp/pisinger.py::generate_song_tempfile : instance Pisinger
 weakly_correlated, R = 1000, alpha = 0.5, scénarios de Song et al.).
 ε = 0,1 n'est pas dans les fichiers : c'est un paramètre du solveur.
 
@@ -22,8 +22,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-sys.path.insert(0, str(REPO / "collect"))
-from collect_large_base_samples import generate_song_tempfile  # noqa: E402
+sys.path.insert(0, str(REPO))
+from generators.mkp.pisinger import generate_song_tempfile  # noqa: E402
 
 N_VALUES = [15, 20, 25, 30]
 N_SCEN_VALUES = [100, 500, 1000]

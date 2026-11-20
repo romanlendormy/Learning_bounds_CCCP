@@ -17,18 +17,20 @@ The baseline **LD0** runs the same B&B with λ initialised at 0.
 ├── env/                  # environment: module list, GPU runtime paths (Trillium / Alliance clusters)
 ├── solver_generic/       # SLD / DLD subgradient solvers (C++), MKP subproblems,
 │                         #   CCPO Lagrangian bound (θ / ζ subproblems, exact presolve, SCIP for ζ)
-├── gecode_base/          # node collection from the plain MKP Gecode B&B (GNN training data)
 ├── solver_bab/           # Gecode branch-and-bound with Lagrangian bounds
-│   ├── mkp/              #   CCMKP: SLD / DLD bounds, GNN inference (LibTorch)
-│   ├── ccpo/             #   CCPO: REF / SLD / FEAS B&B, batched LD / LD0, GNN inference (LibTorch)
+│   ├── mkp/              #   CCMKP: SLD / DLD bounds, GNN inference (LibTorch), node collector
+│   ├── ccpo/             #   CCPO: REF / SLD / FEAS B&B, batched LD / LD0, GNN inference, node collector
 │   └── nvshmem_stub/     #   stub library needed by LibTorch 2.13 CUDA on clusters without NVSHMEM
-├── data/knapsack/        # CCMKP instance generator (Pisinger instances + Song et al. scenarios)
-├── ccpo_stochastic/      # CCPO instance generator (scenarios, discretisation, writers) + tests
-├── collect/              # collection of B&B nodes used as GNN training data (MKP, CCPO)
-├── gnn_sd_edit/          # GNN for CCMKP (SLD / DLD), training and TorchScript export
-│                         #   (B&B binaries must run from the repository root: they call
-│                         #    gnn_sd_edit/*_scriptable*.py to export a checkpoint the first time)
-├── gnn_ccpo/             # GNN for CCPO, training, TorchScript export, validation
+├── generators/           # instance generators
+│   ├── mkp/              #   CCMKP: Pisinger instances + Song et al. scenarios
+│   └── ccpo/             #   CCPO: mother instance, scenarios, discretisation, writers + tests
+├── collect/              # B&B nodes used as GNN training data (C++ collectors in solver_bab/)
+│   ├── mkp/              #   CCMKP: collection with 10 % node sampling
+│   └── ccpo/             #   CCPO: collection, curation, exact presolve flags, extra feasible nodes
+├── gnn/                  # GNNs predicting λ: training and TorchScript export
+│   ├── mkp/              #   CCMKP (SLD / DLD). B&B binaries must run from the repository root:
+│   │                     #   they call gnn/mkp/*_scriptable*.py to export a checkpoint the first time
+│   └── ccpo/             #   CCPO, with export validation and tests
 ├── models/               # trained models used in the paper (mkp/sld, mkp/dld, ccpo)
 └── test_paper/           # experimental campaigns of the paper (scripts + aggregated results)
     ├── mkp/

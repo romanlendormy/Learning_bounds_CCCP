@@ -23,7 +23,7 @@ test_paper/mkp/
 
 n ∈ {15, 20, 25, 30} items × N ∈ {100, 500, 1000} scenarios, m = 5 constraints,
 seeds 43–52 (10 instances per cell). Same generator as the training data
-(`collect/collect_large_base_samples.py`: Pisinger weakly correlated, R = 1000,
+(`generators/mkp/pisinger.py`: Pisinger weakly correlated, R = 1000,
 α = 0.5, Song et al. scenarios). ε = 0.1 is a solver parameter.
 
 ```bash

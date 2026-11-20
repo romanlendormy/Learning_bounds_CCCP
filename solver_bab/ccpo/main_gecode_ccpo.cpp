@@ -1,10 +1,10 @@
 /*
  * main_gecode_ccpo.cpp — CLI pour le B&B du CCPO (modes REF et SLD).
  *
- * Charge un épisode généré par ccpo_stochastic (ep_XXXXXX/{instance.txt,
- * scenarios.txt}, cf. ccpo_stochastic/README.md §Format de sortie).
+ * Charge un épisode généré par generators/ccpo (ep_XXXXXX/{instance.txt,
+ * scenarios.txt}, cf. generators/ccpo/README.md §Format de sortie).
  *
- * Lecteur écrit indépendamment de ccpo_stochastic/writers.py (au-delà du
+ * Lecteur écrit indépendamment de generators/ccpo/writers.py (au-delà du
  * format texte lui-même) -- même esprit que le "lecteur indépendant" testé
  * côté Python (test_writers.py::test_roundtrip_*).
  *
@@ -89,7 +89,7 @@ static CCPOInstance load_ccpo_episode(const std::string& dir)
 }
 
 // ⌈(1-ε)N⌉ en arithmétique entière exacte -- même formule que
-// ccpo_stochastic/txt_format.py::saa_threshold, pas de division flottante.
+// generators/ccpo/txt_format.py::saa_threshold, pas de division flottante.
 static int saa_threshold(int eps_num, int eps_den, int N)
 {
     const long long num = static_cast<long long>(eps_den - eps_num) * N;

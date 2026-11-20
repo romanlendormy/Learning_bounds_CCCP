@@ -4,9 +4,9 @@
  * (arêtes inter-scénarios en étoile), sans IPC.
  *
  * Graphe sd_edit : arêtes scénario-scénario en étoile ancrée au scénario 0
- * (poids 1, O(n_g·N_z) arêtes) — cf. gnn_sd_edit/train_SLD_sd_edit.py.
+ * (poids 1, O(n_g·N_z) arêtes) — cf. gnn/mkp/train_SLD_sd_edit.py.
  * Features de nœuds (7m+5), calcul de L1(λ) (lagrangian_sld_cpp) et export
- * TorchScript (gnn_sd_edit/gnn_sld_scriptable.py, qui ne dépend pas de la
+ * TorchScript (gnn/mkp/gnn_sld_scriptable.py, qui ne dépend pas de la
  * topologie du graphe).
  *
  * pImpl : ce header ne dépend PAS de <torch/script.h> (inclus seulement dans

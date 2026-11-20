@@ -26,7 +26,7 @@ test_paper/ccpo/
 ## Test instances
 
 n ∈ {8, 10, 12, 15} items × N ∈ {100, 500, 1000} scenarios, 10 feasible instances per cell.
-Each instance is produced by `collect/gen_bab_test_episode.py`, the generator of the training
+Each instance is produced by `generators/ccpo/gen_test_episode.py`, the generator of the training
 data with disjoint seeds (seed = 7·10⁹ + 100 000 n + 1000 N + idx; Q = round(2.5 n),
 k = max(3, ⌊n/2⌋), L = 2, U = 8, γ = 1.25, ε = 0.1).
 

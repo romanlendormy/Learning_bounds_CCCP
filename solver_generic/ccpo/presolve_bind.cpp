@@ -1,5 +1,5 @@
 // presolve_bind.cpp — binding ctypes : presolve exact certifié (C++) et ancien presolve, pour la validation
-// et le recalcul des drapeaux de scénarios (collect/recompute_presolve_flags.py). Cible CMake presolve_exact.
+// et le recalcul des drapeaux de scénarios (collect/ccpo/recompute_presolve_flags.py). Cible CMake presolve_exact.
 #include "ccpo_sld.hpp"
 
 static std::vector<std::vector<double>> to_mat(int n, const double* S) {

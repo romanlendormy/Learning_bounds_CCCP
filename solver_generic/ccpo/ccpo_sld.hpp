@@ -40,7 +40,7 @@
  * séparée via (beta_j, sigma_f_j). Différence cruciale : Sigma_int est arrondi
  * ENTRÉE PAR ENTRÉE à la génération (§3 de la spec), donc légèrement différent
  * d'une factorisation rang-1 idéalisée reconstruite a posteriori (écart
- * mesuré : λ2/λ1 < 5%, cf. ccpo_stochastic tests). Utiliser Sigma_int dense
+ * mesuré : λ2/λ1 < 5%, cf. tests de generators/ccpo). Utiliser Sigma_int dense
  * directement pour LA BORNE garantit qu'elle reste valide PAR RAPPORT À CE
  * QUE REF VÉRIFIE RÉELLEMENT -- pas de risque d'élaguer à tort une branche
  * qui serait vraiment faisable. À n≤30, une factorisation Cholesky par nœud

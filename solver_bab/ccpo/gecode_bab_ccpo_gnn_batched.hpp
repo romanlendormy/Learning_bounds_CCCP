@@ -22,7 +22,7 @@
  *
  * Bucketing par n_free SEUL (pas (n_free, n_eligible)) : n_eligible est
  * constant pour tout un run (une instance, présolve fait une fois), cf.
- * gnn_ccpo/ccpo_gnn_scriptable_batched.py.
+ * gnn/ccpo/ccpo_gnn_scriptable_batched.py.
  */
 
 #include "ccpo_gnn_backend_batch.hpp"

@@ -2,7 +2,7 @@
 /*
  * gnn_dld_sd_edit_scriptable_batched_export.hpp — Export TorchScript
  * one-shot (fork python, mis en cache) du module BATCHÉ DLD
- * (gnn_sd_edit/gnn_dld_sd_edit_scriptable_batched.py). Miroir de
+ * (gnn/mkp/gnn_dld_sd_edit_scriptable_batched.py). Miroir de
  * gnn_sd_edit_scriptable_batched_export.hpp (SLD), suffixe de cache
  * distinct (.dld_scripted_batched.pt) — ne touche jamais aux fichiers
  * d'export SLD.
@@ -34,7 +34,7 @@ inline std::string ensure_dld_scripted_batched_export(const std::string& checkpo
     if (file_exists(scripted_path) && file_mtime(scripted_path) >= file_mtime(checkpoint_path))
         return scripted_path;
 
-    std::string script = "gnn_sd_edit/gnn_dld_sd_edit_scriptable_batched.py";
+    std::string script = "gnn/mkp/gnn_dld_sd_edit_scriptable_batched.py";
 
     std::vector<char*> argv = {
         const_cast<char*>(python_exe.c_str()), const_cast<char*>(script.c_str()),

@@ -5,8 +5,8 @@
  *   bab_mkp_gecode  <dataset.txt>  [epsilon]  [T_node]  [time_limit_s]  [replication]
  *
  * Exemple :
- *   bab_mkp_gecode  ../data/knapsack/datasets-song/ccmk-song-mknap1_4-S20.txt
- *   bab_mkp_gecode  ../data/knapsack/datasets-song/ccmk-song-mknap1_4-S20.txt 0.1 30 120 2
+ *   bab_mkp_gecode  test_paper/mkp/instances/instance_n15_m5_N100_seed43.txt
+ *   bab_mkp_gecode  test_paper/mkp/instances/instance_n15_m5_N100_seed43.txt 0.1 30 120 2
  */
 
 #include "gecode_bab.hpp"

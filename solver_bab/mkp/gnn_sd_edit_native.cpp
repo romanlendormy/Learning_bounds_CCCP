@@ -110,7 +110,7 @@ std::pair<torch::Tensor, torch::Tensor> build_edges_vectorized(
     return {edge_index, edge_weight};
 }
 
-// ── build_graph (port de gnn_sd_edit.train_SLD_sd_edit.build_graph) ────────
+// ── build_graph (port de gnn.mkp.train_SLD_sd_edit.build_graph) ────────
 // z_mask est toujours "libre" dans notre usage B&B (le more() C++ appelant ne
 // fixe jamais aucun scénario) — même hypothèse que la variante homogène.
 // N_z = N, n_fixed_z1 = 0 en conséquence.
@@ -233,7 +233,7 @@ BuiltGraph build_graph_cpp(int n, int m, int N, const Vec1d& c, const Vec3d& A, 
     //    ci-dessus) : item_varies = clique complète par scénario (poids
     //    1/n_g, identique à la variante homogène) ; scenario_varies = ÉTOILE
     //    ancrée au scénario 0 (poids 1.0), seule différence avec la variante
-    //    homogène — cf. gnn_sd_edit/train_SLD_sd_edit.py:265-277.
+    //    homogène — cf. gnn/mkp/train_SLD_sd_edit.py:265-277.
     auto [edge_index_v, edge_weight_v] = build_edges_vectorized(n_g, N_z, edge_tpl, device);
     g.edge_index = edge_index_v;
     g.edge_weight = edge_weight_v;
@@ -256,7 +256,7 @@ BuiltGraph build_graph_cpp(int n, int m, int N, const Vec1d& c, const Vec3d& A, 
     return g;
 }
 
-// ── lagrangian_sld (port de gnn.train_gnn_sld.lagrangian_sld) ────────────
+// ── lagrangian_sld (port de gnn/mkp/train_SLD_sd_edit.py::lagrangian_sld) ────────────
 // Topologie-agnostique : ne lit que A_g/b_res_g/c_g/lam.
 double lagrangian_sld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double epsilon) {
     int N_z = g.N_z, n_g = g.n_g, m = static_cast<int>(g.A_g[0].size());
@@ -318,7 +318,7 @@ double lagrangian_sld_cpp(const torch::Tensor& lam, const BuiltGraph& g, double 
 }
 
 // ── Export TorchScript one-shot (fork python, mis en cache) ─────────────────
-// gnn_sd_edit/gnn_sld_scriptable.py est topologie-agnostique (tenseurs bruts X/edge_index/edge_weight/context),
+// gnn/mkp/gnn_sld_scriptable.py est topologie-agnostique (tenseurs bruts X/edge_index/edge_weight/context),
 // donc réutilisable tel quel pour un checkpoint entraîné sur sd_edit — pas
 // de script d'export séparé nécessaire.
 bool file_exists(const std::string& p) { struct stat st; return ::stat(p.c_str(), &st) == 0; }
@@ -329,7 +329,7 @@ std::string ensure_scripted_export(const std::string& checkpoint_path, const std
     if (file_exists(scripted_path) && file_mtime(scripted_path) >= file_mtime(checkpoint_path))
         return scripted_path;
 
-    std::string script = "gnn_sd_edit/gnn_sld_scriptable.py";
+    std::string script = "gnn/mkp/gnn_sld_scriptable.py";
 
     std::vector<char*> argv = {
         const_cast<char*>(python_exe.c_str()), const_cast<char*>(script.c_str()),

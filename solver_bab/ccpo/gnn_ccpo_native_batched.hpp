@@ -5,7 +5,7 @@
  * mkp/gnn_sd_edit_native_batched.{hpp,cpp} : construction du graphe 100 % C++
  * (ccpo_graph_cpp.hpp, validé 24/24 vs ccpo_graph.py), forward = UN appel
  * TorchScript pour tout le batch (module exporté par
- * gnn_ccpo/ccpo_gnn_scriptable_batched.py).
+ * gnn/ccpo/ccpo_gnn_scriptable_batched.py).
  *
  * Header sans libtorch (pimpl) pour pouvoir être inclus depuis les TU Gecode.
  */

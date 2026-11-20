@@ -1,6 +1,6 @@
 // ccpo_presolve_exact.hpp — presolve CCPO EXACT et CERTIFIÉ.
 //
-// Port C++ ligne à ligne de gnn_ccpo/presolve_box_exact.py::box_min_certified (validé sur 3000 cas
+// Port C++ ligne à ligne de gnn/ccpo/presolve_box_exact.py::box_min_certified (validé sur 3000 cas
 // aléatoires contre l'énumération des 3^n ensembles actifs, et sur 3,74 M scénarios de collect_campaign_v2).
 //
 // Problème (relaxation boîte d'un scénario) : v* = min q'Σq  s.c.  Σq = Q, 0 <= q <= U.

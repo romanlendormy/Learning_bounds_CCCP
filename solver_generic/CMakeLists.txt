@@ -52,7 +52,7 @@ target_include_directories(ccpo_scip_zeta PRIVATE ${SCIP_INCLUDE_DIR})
 target_compile_options(ccpo_scip_zeta PRIVATE -O3 -march=native)
 target_link_libraries(ccpo_scip_zeta PUBLIC ccpo_bound ${SCIP_LIBRARY} -Wl,-rpath,${SCIP_LIBRARY_DIR} ${SCIP_RPATH_LINK} OpenMP::OpenMP_CXX)
 
-# Bibliothèques partagées appelées depuis Python (ctypes, gnn_ccpo/ccpo_libs.py) :
+# Bibliothèques partagées appelées depuis Python (ctypes, gnn/ccpo/ccpo_libs.py) :
 #   ccpo_lagrangian.so : L(λ), sous-gradient, sous-gradient complet (entraînement du GNN CCPO) ;
 #   presolve_exact.so  : presolve exact certifié (recalcul des drapeaux de scénarios, tests).
 add_library(ccpo_lagrangian SHARED ccpo/ccpo_lagrangian_bind.cpp)

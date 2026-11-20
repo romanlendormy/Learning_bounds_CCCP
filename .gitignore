@@ -27,9 +27,7 @@ runs/
 models/mkp/**/*scripted*.pt
 
 # Large datasets, recreated by the generation / collection scripts
-data/knapsack/datasets-song-github/
-data/knapsack/datasets-pisinger/
-data/knapsack/pisinger/
+data/mkp/
 data/train*/
 test_paper/mkp/instances/
 test_paper/ccpo/instances/

@@ -1,7 +1,7 @@
 /*
  * ccpo_graph_bind.cpp — Interface C pour ccpo_graph_cpp.hpp, meme patron que
  * ccpo_lagrangian_bind.cpp (extern "C", pointeurs bruts, ctypes). Sert a
- * valider numeriquement ccpo_graph_cpp.hpp contre gnn_ccpo/ccpo_graph.py
+ * valider numeriquement ccpo_graph_cpp.hpp contre gnn/ccpo/ccpo_graph.py
  * (cf. validate_ccpo_graph_cpp.py) AVANT de l'utiliser dans le futur driver
  * B&B+GNN batche.
  *

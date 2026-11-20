@@ -18,7 +18,7 @@
 
 namespace {
 
-// Mêmes définitions que gnn_ccpo/train_ccpo_gnn.py::instance_scales (le GNN
+// Mêmes définitions que gnn/ccpo/train_ccpo_gnn.py::instance_scales (le GNN
 // a été entraîné avec ces échelles -- DOIT rester synchronisé).
 void compute_scales(const CCPOSharedData& d, double& c_scale, double& sigma_scale) {
     int cmax = 0;

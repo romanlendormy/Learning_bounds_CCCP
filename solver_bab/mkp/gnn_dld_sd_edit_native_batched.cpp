@@ -2,7 +2,7 @@
  * gnn_dld_sd_edit_native_batched.cpp — Implémentation (cf.
  * gnn_dld_sd_edit_native_batched.hpp). Port MOT POUR MOT (mêmes formules,
  * même ordre d'opérations autant que possible) de
- * gnn_sd_edit/train_DLD_sd_edit.py::build_graph/GNN.forward/lagrangian_dld,
+ * gnn/mkp/train_DLD_sd_edit.py::build_graph/GNN.forward/lagrangian_dld,
  * en suivant la structure de gnn_sd_edit_native_batched.cpp (SLD) — cf.
  * docstring de ce dernier pour la logique générale de séparation
  * features/arêtes et le cache par active_x.

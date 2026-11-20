@@ -4,7 +4,7 @@ Génère les 120 instances CCPO de test de l'article (campagnes LD et LD0).
 
 Grille : n ∈ {8, 10, 12, 15} × N ∈ {100, 500, 1000}, 10 instances faisables par cellule,
 listées dans instances_list.txt (n N idx graine certificat). Chaque instance est produite par
-collect/gen_bab_test_episode.py (même générateur que les données d'entraînement, graines
+generators/ccpo/gen_test_episode.py (même générateur que les données d'entraînement, graines
 disjointes : graine = 7e9 + 100000 n + 1000 N + idx). Le choix des indices retenus est
 documenté dans selection/.
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-GEN = REPO / "collect" / "gen_bab_test_episode.py"
+GEN = REPO / "generators" / "ccpo" / "gen_test_episode.py"
 
 
 def main():

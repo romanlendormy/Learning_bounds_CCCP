@@ -99,8 +99,8 @@ target_link_libraries(bab_mkp_gecode_dld_gnn_batched PRIVATE mkp_bab_core)
 
 # bab_mkp_gecode_base_collect : B&B Gecode de base + collecte des nœuds (données GNN).
 add_executable(bab_mkp_gecode_base_collect
-    ../gecode_base/main_collect_gecode_base.cpp
-    ../gecode_base/collect_gecode_base.cpp
+    mkp/main_collect_gecode_base.cpp
+    mkp/collect_gecode_base.cpp
 )
 target_compile_options(bab_mkp_gecode_base_collect PRIVATE -O3 -march=native)
 target_link_libraries(bab_mkp_gecode_base_collect PRIVATE mkp_bab_core)
@@ -141,7 +141,7 @@ target_compile_options(bab_ccpo_collect PRIVATE -O3 -march=native)
 target_link_libraries(bab_ccpo_collect PRIVATE ccpo_bab_core)
 
 # ccpo_graph.so : graphe du GNN CCPO construit en C++, appelé depuis Python (ctypes) pour
-# vérifier la correspondance avec gnn_ccpo/ccpo_graph.py (gnn_ccpo/test_correspondence.py).
+# vérifier la correspondance avec gnn/ccpo/ccpo_graph.py (gnn/ccpo/test_correspondence.py).
 add_library(ccpo_graph SHARED ccpo/ccpo_graph_bind.cpp)
 target_include_directories(ccpo_graph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ccpo)
 target_compile_options(ccpo_graph PRIVATE -O3 -march=native)

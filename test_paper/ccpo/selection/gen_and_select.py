@@ -39,7 +39,7 @@ def work(t):
     ep = OUT / "candidates" / f"n{n}_N{N}" / f"i{i}"
     row = dict(n=n, N=N, idx=i, seed=seed_of(n, N, i), status="", nodes="", time="", objective="", greedy="", verdict="")
     if not (ep / "ep_000000").exists():
-        r = subprocess.run([a.python, str(REPO / "collect/gen_bab_test_episode.py"), str(n), str(N), str(i), str(ep)],
+        r = subprocess.run([a.python, str(REPO / "generators/ccpo/gen_test_episode.py"), str(n), str(N), str(i), str(ep)],
                            capture_output=True, text=True, cwd=REPO)
         if r.returncode != 0:
             row["status"] = "NON_DISCRETISABLE"; row["verdict"] = "reject:non_discretisable"

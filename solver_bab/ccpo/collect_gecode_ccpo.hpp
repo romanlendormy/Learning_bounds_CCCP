@@ -3,7 +3,7 @@
  * collect_gecode_ccpo.hpp — B&B Gecode CP pur (mode REF) avec collecte
  * d'états de nœuds pour l'entraînement du GNN.
  *
- * Sur le patron de gecode_base/collect_gecode_base.hpp (MKP) : réutilise
+ * Sur le patron de solver_bab/mkp/collect_gecode_base.hpp (MKP) : réutilise
  * directement CCPOSpaceSLD en BoundMode::REF (aucune borne SLD calculée,
  * more() est un no-op -- cf. gecode_bab_ccpo.hpp), fait une DFS manuelle
  * identique en esprit à solve_gecode_bab_ccpo, et dump l'état de chaque
@@ -67,7 +67,7 @@ inline void write_instance_line_ccpo(
     for (int j = 0; j < data.N; ++j) out << ',' << (data.infeasible_scenario[j] ? 1 : 0);
 
     // Sigma : triangle supérieur (i,k,val) par scénario -- même format que
-    // scenarios.txt (ccpo_stochastic), pour réutiliser le même parseur.
+    // scenarios.txt (generators/ccpo), pour réutiliser le même parseur.
     for (int j = 0; j < data.N; ++j)
         for (const auto& t : data.sigma[j])
             out << ',' << t[0] << ',' << t[1] << ',' << t[2];
@@ -86,7 +86,7 @@ inline void write_node_line_ccpo(
 
 // ─────────────────────────────────────────────────────────────────────────
 // solve_gecode_bab_ccpo_collect — DFS CP-only (REF) + collecte, sur le
-// patron de solve_gecode_bab_mkp_collect_base (gecode_base).
+// patron de solve_gecode_bab_mkp_collect_base (solver_bab/mkp/collect_gecode_base.cpp).
 // ─────────────────────────────────────────────────────────────────────────
 inline CCPOResult solve_gecode_bab_ccpo_collect(
     int n, int N, int k, int Q, int L, int U, long long B, int min_feas,

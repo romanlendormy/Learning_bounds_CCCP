@@ -2,7 +2,7 @@
 /*
  * gnn_sd_edit_scriptable_batched_export.hpp — Export TorchScript one-shot
  * (fork python, mis en cache) du module BATCHÉ
- * (gnn_sd_edit/gnn_sd_edit_scriptable_batched.py), même mécanisme que
+ * (gnn/mkp/gnn_sd_edit_scriptable_batched.py), même mécanisme que
  * ensure_scripted_export() dans gnn_sd_edit_native.cpp mais pointant vers le
  * script batché et un suffixe de cache distinct (.scripted_batched.pt) —
  * ne touche jamais au .scripted.pt de production.
@@ -37,7 +37,7 @@ inline std::string ensure_scripted_batched_export(const std::string& checkpoint_
     if (file_exists(scripted_path) && file_mtime(scripted_path) >= file_mtime(checkpoint_path))
         return scripted_path;
 
-    std::string script = "gnn_sd_edit/gnn_sd_edit_scriptable_batched.py";
+    std::string script = "gnn/mkp/gnn_sd_edit_scriptable_batched.py";
 
     std::vector<char*> argv = {
         const_cast<char*>(python_exe.c_str()), const_cast<char*>(script.c_str()),

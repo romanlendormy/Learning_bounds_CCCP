@@ -58,7 +58,7 @@ struct Inst {
     std::vector<std::vector<SigmaTriplet>> sigma;
 };
 
-// Même lecteur que main_gecode_ccpo.cpp::load_ccpo_episode (format ccpo_stochastic).
+// Même lecteur que main_gecode_ccpo.cpp::load_ccpo_episode (format generators/ccpo).
 Inst load_episode(const std::string& dir) {
     Inst in;
     std::ifstream f(dir + "/instance.txt");

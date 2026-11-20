@@ -1,6 +1,6 @@
 #pragma once
 /*
- * ccpo_graph_cpp.hpp — Port C++ EXACT de gnn_ccpo/ccpo_graph.py (construction
+ * ccpo_graph_cpp.hpp — Port C++ EXACT de gnn/ccpo/ccpo_graph.py (construction
  * du graphe d'entree du GNN CCPO), pour etre appele a CHAQUE noeud du futur
  * driver B&B+GNN batche SANS repasser par Python (miroir du pattern MKP :
  * gnn_sd_edit_native_batched.cpp::compute_active_x_invariant/build_features_cpp

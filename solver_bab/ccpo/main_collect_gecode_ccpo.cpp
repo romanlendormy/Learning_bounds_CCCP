@@ -2,9 +2,9 @@
  * main_collect_gecode_ccpo.cpp — CLI de collecte de traces B&B (REF, CP pur)
  * pour l'entraînement du GNN CCPO.
  *
- * Charge un épisode ccpo_stochastic (mêmes fichiers/format que
+ * Charge un épisode CCPO (generators/ccpo) (mêmes fichiers/format que
  * main_gecode_ccpo.cpp -- chargeur dupliqué ici à l'identique, pour rester
- * autonome comme gecode_base/main_collect_gecode_base.cpp côté MKP).
+ * autonome comme solver_bab/mkp/main_collect_gecode_base.cpp côté MKP).
  *
  * Usage :
  *   bab_ccpo_collect <répertoire épisode> <instance_id> <time_lim_s> \
@@ -12,7 +12,7 @@
  *
  * Les deux fichiers de sortie sont ouverts en APPEND -- appelé en boucle
  * (une fois par épisode) depuis un script Python/SLURM, cf.
- * collect/collect_ccpo_samples.py.
+ * collect/ccpo/collect_ccpo_samples.py.
  */
 
 #include "collect_gecode_ccpo.hpp"
