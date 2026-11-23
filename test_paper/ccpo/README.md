@@ -1,8 +1,10 @@
 # CCPO experiments
 
-The CCPO campaign of the paper compares two arms of the same batched Gecode B&B on 120 feasible
+The CCPO campaign of the paper compares three arms of the same Gecode B&B on 120 feasible
 test instances:
 
+- **REF**: no Lagrangian bound; each node only gets the exact residual feasibility test (some
+  scenario must still admit a feasible completion), solver mode `feas`;
 - **LD**: Lagrangian bound with λ predicted by the GNN (`models/ccpo/`, epoch 57), solver mode `gnn`;
 - **LD0**: the same bound evaluated at λ = 0, no network, solver mode `gnn_zero`.
 
@@ -14,13 +16,14 @@ test_paper/ccpo/
 ├── generate_test_instances.py   # the 120 test instances (deterministic)
 ├── instances_list.txt           # one line per instance: n N idx seed certificate (array task i = line i)
 ├── instances_md5.txt            # md5 of instance.txt and scenarios.txt of the instances used in the paper
-├── campaign_config.env          # settings shared by both arms
-├── run_ld_array.sh              # one arm (MODE=gnn or MODE=gnn_zero), one array task per instance
+├── campaign_config.env          # settings shared by the three arms
+├── run_ld_array.sh              # LD or LD0 (MODE=gnn or MODE=gnn_zero), one array task per instance
+├── run_ref_nodepack.sh          # REF, 8 instances per CPU node
 ├── parse_result.py              # solver log -> one CSV line
-├── aggregate_results.py         # per-instance CSVs -> one CSV + LD vs LD0 table per cell
-├── sanity_check.sh              # LD0 and LD on one instance, compared with the paper results
+├── aggregate_results.py         # per-instance CSVs -> one CSV + REF / LD0 / LD table per cell
+├── sanity_check.sh              # REF, LD0 and LD on one instance, compared with the paper results
 ├── selection/                   # how the 10 feasible instances per cell were chosen
-└── results/{ld,ld0}/            # one CSV per instance (paper results)
+└── results/{ref,ld0,ld}/        # one CSV per instance (paper results)
 ```
 
 ## Test instances
@@ -53,8 +56,8 @@ current binary has the exact presolve, which the selection binary did not.
    ```bash
    bash test_paper/ccpo/sanity_check.sh
    ```
-   This solves n = 8, N = 100, idx 100 with LD0 and LD (a few seconds, GNN forward on CPU) and
-   checks status, optimum and node count against `results/`. LD0 must match exactly. LD with a
+   This solves n = 8, N = 100, idx 100 with REF, LD0 and LD (a few seconds, GNN forward on CPU)
+   and checks status, optimum and node count against `results/`. REF and LD0 must match exactly. LD with a
    CPU forward may explore a different tree than with the GPU forward of the paper (λ can differ
    in the last bit), so only its optimum is checked strictly.
 3. Submit from the repository root (`SLURM_SUBMIT_DIR` locates the repository; binaries run from
@@ -62,16 +65,21 @@ current binary has the exact presolve, which the selection binary did not.
    ```bash
    sbatch --array=1-120 --export=ALL,MODE=gnn      test_paper/ccpo/run_ld_array.sh   # LD
    sbatch --array=1-120 --export=ALL,MODE=gnn_zero test_paper/ccpo/run_ld_array.sh   # LD0
+   sbatch --array=1-15 test_paper/ccpo/run_ref_nodepack.sh                            # REF (CPU nodes)
    python3 test_paper/ccpo/aggregate_results.py "$SCRATCH/test_paper_ccpo/results"
    ```
    Outputs go to `$OUT_DIR`, by default `$SCRATCH/test_paper_ccpo/` (`logs/` with the full solver
-   output, `results/{ld,ld0}/` with one CSV per instance). A task whose CSV exists is skipped, so a
-   failed array can be resubmitted as is.
+   output, `results/{ref,ld0,ld}/` with one CSV per instance). An instance whose CSV exists is
+   skipped, so a failed array can be resubmitted as is.
 
 ## Settings (`campaign_config.env`)
 
-Both arms run the same binary (`build/solver_bab/bab_ccpo`) with the same settings and hardware:
-a quarter of a Trillium GPU node (1 H100, 24 cores).
+The three arms run the same binary (`build/solver_bab/bab_ccpo`) on the same instances, with the
+same stopping rule. LD and LD0 run on a quarter of a Trillium GPU node (1 H100, 24 cores).
+REF uses no GPU and runs on full Trillium CPU nodes, 8 instances at a time, each pinned to
+24 physical cores. These nodes are about 10 % faster than the CPU part of a GPU node (LD0 on
+8 instances of n = 8 to 12, same trees), so the comparison slightly favors REF. The feasibility
+test of REF loops over the scenarios sequentially, so REF effectively uses one core.
 
 - Depth-first B&B with exact presolve; nodes are evaluated in buckets of K = 32 (one GNN forward
   per bucket for LD, on the GPU).
@@ -80,12 +88,17 @@ a quarter of a Trillium GPU node (1 H100, 24 cores).
   is included in ζ. Infeasibility is not inherited from parents.
 - `OMP_WAIT_POLICY=passive`: busy-waiting OpenMP threads made times vary by up to 10× on shared
   GPU nodes; passive waiting makes them stable and equal to those on an idle node.
+- REF uses the same ζ solver for its feasibility test, without SCIP (`CCPO_ZETA_SCIP=0`): ζ is
+  only solved for feasibility there, with a zero cost.
 - No solver time limit; runs are stopped at 23 h 50 (status `KILLED_WALL`), within the 24 h wall.
 
 ## Results
 
-`results/ld/` (120 runs) and `results/ld0/`: one CSV line per run, columns given by
-`python3 test_paper/ccpo/parse_result.py --header`; the `mode` column holds the solver mode
-(`gnn` for LD, `gnn_zero` for LD0). `aggregate_results.py` adds the first-level gap
-(bound at the children of the root vs the optimum) and prints, per cell, the median time,
-nodes and gap of each arm, and the per-instance time ratio LD0/LD.
+`results/ref/`, `results/ld0/` and `results/ld/` (120 runs each): one CSV line per run, columns
+given by `python3 test_paper/ccpo/parse_result.py --header`; the `mode` column holds the solver mode
+(`feas` for REF, `gnn_zero` for LD0, `gnn` for LD). LD and LD0 solve all 120 instances to
+optimality; REF solves 116 and is stopped at 23 h 50 on four instances of n = 15, N = 1000
+(idx 100, 110, 120, 140). All arms agree on the optimum of every instance they solve.
+`aggregate_results.py` adds the first-level gap (bound at the children of the root vs the
+optimum, LD and LD0) and prints, per cell, the time, nodes and gap of each arm (median by
+default, `--stat mean` for the paper table), and the per-instance time ratios REF/LD and LD0/LD.

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-aggregate_results.py — CCPO : réunit les CSV par run (results/ld/, results/ld0/, écrits par parse_result.py) en un seul CSV
-avec en-tête, calcule gap_root_pct hors ligne, et imprime la comparaison LD vs LD0 par cellule (n, N).
+aggregate_results.py — CCPO : réunit les CSV par run (results/ref/, results/ld0/, results/ld/, écrits par parse_result.py) en
+un seul CSV avec en-tête, calcule gap_root_pct hors ligne, et imprime la comparaison REF / LD0 / LD par cellule (n, N).
 
 Usage (depuis la racine du dépôt) :
   python3 test_paper/ccpo/aggregate_results.py [dossier_resultats] [--out results.csv] [--stat median|mean|geomean]
   (défaut : test_paper/ccpo/results ; tous les *.csv des sous-dossiers sont lus)
 
-- Optimum d'une instance : objectif d'un run OPTIMAL de cette instance (LD et LD0 donnent le même).
-- gap_root_pct = 100 · (borne du premier niveau − optimum) / optimum.
+- Optimum d'une instance : objectif d'un run OPTIMAL de cette instance (les trois bras donnent le même).
+- gap_root_pct = 100 · (borne du premier niveau − optimum) / optimum (LD0 et LD ; REF n'a pas de borne lagrangienne).
 - Tableau : statistique (médiane par défaut) sur les runs OPTIMAL de la cellule du temps de résolution (s), du nombre de nœuds
-  et du gap ; (s/t) = résolues / total. Colonnes LD0/LD : statistique, sur les instances résolues par les deux bras, du rapport
-  des temps par instance (> 1 : LD plus rapide), et nombre d'instances où LD est plus rapide.
+  et du gap ; (s/t) = résolues / total. Colonnes REF/LD et LD0/LD : statistique, sur les instances résolues par les deux bras,
+  du rapport des temps par instance (> 1 : LD plus rapide) ; pour LD0/LD, nombre d'instances où LD est plus rapide.
 """
 import argparse
 import csv
@@ -78,9 +78,10 @@ def fmt_n(x):
 cells = defaultdict(lambda: defaultdict(dict))   # (n, N) -> mode -> idx -> run
 for r in rows:
     cells[(int(r["n"]), int(r["N"]))][r["mode"]][r["idx"]] = r
-arms = (("gnn_zero", "LD0"), ("gnn", "LD"))
+arms = (("feas", "REF"), ("gnn_zero", "LD0"), ("gnn", "LD"))
 print(f"\n{a.stat} sur les runs OPTIMAL ; (s/t) = résolues/total ; gap = gap du premier niveau (%) vs optimum")
-print(f"{'n':>3} {'N':>5} | " + " | ".join(f"{h} t(s) nœuds gap (s/t)" for _, h in arms) + " | LD0/LD  LD plus rapide")
+print(f"{'n':>3} {'N':>5} | " + " | ".join(f"{h} t(s) nœuds" + (" gap" if m != "feas" else "") + " (s/t)" for m, h in arms)
+      + " | REF/LD | LD0/LD  LD plus rapide")
 for (n, N) in sorted(cells):
     out = []
     for m, _ in arms:
@@ -90,10 +91,13 @@ for (n, N) in sorted(cells):
             out.append(f"— ({len(sol)}/{len(rs)})")
             continue
         t, nd = stat([fl(r["solve_time_s"]) for r in sol]), stat([fl(r["nodes"]) for r in sol])
-        gap = stat([fl(r["gap_root_pct"]) for r in sol])
-        out.append(f"{fmt_t(t)} {fmt_n(nd)} {gap:.1f} ({len(sol)}/{len(rs)})")
-    ld0, ld = cells[(n, N)].get("gnn_zero", {}), cells[(n, N)].get("gnn", {})
-    both = [i for i in ld if i in ld0 and ld[i]["status"] == ld0[i]["status"] == "OPTIMAL"]
-    ratios = [fl(ld0[i]["solve_time_s"]) / fl(ld[i]["solve_time_s"]) for i in both]
-    cmp_ = f"{stat(ratios):.2f}  {sum(x > 1 for x in ratios)}/{len(both)}" if both else "—"
-    print(f"{n:>3} {N:>5} | " + " | ".join(out) + f" | {cmp_}")
+        gap = "" if m == "feas" else f" {stat([fl(r['gap_root_pct']) for r in sol]):.1f}"
+        out.append(f"{fmt_t(t)} {fmt_n(nd)}{gap} ({len(sol)}/{len(rs)})")
+    ld = cells[(n, N)].get("gnn", {})
+    cmp_ = []
+    for m in ("feas", "gnn_zero"):
+        other = cells[(n, N)].get(m, {})
+        both = [i for i in ld if i in other and ld[i]["status"] == other[i]["status"] == "OPTIMAL"]
+        ratios = [fl(other[i]["solve_time_s"]) / fl(ld[i]["solve_time_s"]) for i in both]
+        cmp_.append(("—" if not both else f"{stat(ratios):.2f}") + ("" if m == "feas" or not both else f"  {sum(x > 1 for x in ratios)}/{len(both)}"))
+    print(f"{n:>3} {N:>5} | " + " | ".join(out) + " | " + " | ".join(cmp_))

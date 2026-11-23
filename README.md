@@ -8,7 +8,8 @@ inside an exact branch-and-bound (Gecode), on two chance-constrained problems:
 
 For each problem, the bound is a scenario Lagrangian decomposition. At every node of the
 B&B, the GNN predicts the multipliers λ, which warm-start (or replace) the subgradient method.
-The baseline **LD0** runs the same B&B with λ initialised at 0.
+The baseline **LD0** runs the same B&B with λ initialised at 0, and **REF** is the B&B without
+Lagrangian bound.
 
 ## Repository layout
 

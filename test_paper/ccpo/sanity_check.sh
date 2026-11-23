@@ -1,8 +1,8 @@
 #!/bin/bash
 # test_paper/ccpo/sanity_check.sh — Contrôle rapide de la chaîne CCPO sur une instance (n = 8, N = 100, idx 100 ;
-# quelques secondes par bras) : LD0 et LD avec les réglages de la campagne, puis comparaison du statut, de l'optimum
-# et du nombre de nœuds avec les résultats de l'article (results/ld0, results/ld).
-# LD0 ne dépend d'aucun calcul flottant du réseau : ses nœuds doivent coïncider exactement. Pour LD, le forward sur
+# quelques secondes par bras) : REF, LD0 et LD avec les réglages de la campagne, puis comparaison du statut, de l'optimum
+# et du nombre de nœuds avec les résultats de l'article (results/ref, results/ld0, results/ld).
+# REF et LD0 ne dépendent d'aucun calcul flottant du réseau : leurs nœuds doivent coïncider exactement. Pour LD, le forward sur
 # CPU au lieu du GPU de l'article peut changer λ au dernier bit, donc l'arbre : seul un écart d'optimum est une erreur.
 #
 # Depuis la racine du dépôt (sur un nœud de calcul, ou un nœud de connexion pour ce seul test court) :
@@ -26,6 +26,7 @@ EP="${INSTANCES_DIR:-$TD/instances}/n8_N100/i100/ep_000000"
 [[ -d "$EP" ]] || { echo "[ERREUR] instance introuvable : $EP (python3 test_paper/ccpo/generate_test_instances.py)" >&2; exit 1; }
 OUT="$(mktemp -d)"
 echo "# logs : $OUT (forward LD : $DEVICE)"
+CCPO_ZETA_SCIP=0 "$BIN" "$EP" "$TL" feas > "$OUT/ref.log" 2>&1
 "$BIN" "$EP" "$TL" gnn_zero "$T_ROOT" "$T_NODE" "$K" "$OMP_NUM_THREADS" > "$OUT/ld0.log" 2>&1
 "$BIN" "$EP" "$TL" gnn "$T_ROOT" "$T_NODE" "$K" "$OMP_NUM_THREADS" "$MODEL" "$TORCH_THREADS" "$DEVICE" > "$OUT/ld.log" 2>&1
 
@@ -38,6 +39,7 @@ check() {  # mode log résultat_article nœuds_stricts
     elif [[ $4 == 0 && "${got%,*}" == "${want%,*}" ]]; then echo "OK      $1 : $got (statut, optimum ; nœuds article ${want##*,})"
     else echo "ÉCART   $1 : obtenu $got, article $want (log : $2)"; fail=1; fi
 }
+check feas     "$OUT/ref.log" "$TD/results/ref/ref_n8_N100_i100.csv" 1
 check gnn_zero "$OUT/ld0.log" "$TD/results/ld0/ld0_n8_N100_i100.csv" 1
 check gnn      "$OUT/ld.log"  "$TD/results/ld/ld_n8_N100_i100.csv"  0
 exit $fail
