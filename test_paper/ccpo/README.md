@@ -23,6 +23,7 @@ test_paper/ccpo/
 ├── aggregate_results.py         # per-instance CSVs -> one CSV + REF / LD0 / LD table per cell
 ├── sanity_check.sh              # REF, LD0 and LD on one instance, compared with the paper results
 ├── selection/                   # how the 10 feasible instances per cell were chosen
+├── gnn_vs_subgrad/              # root bound: one GNN call vs t* subgradient iterations (figure t*)
 └── results/{ref,ld0,ld}/        # one CSV per instance (paper results)
 ```
 
@@ -102,3 +103,6 @@ optimality; REF solves 116 and is stopped at 23 h 50 on four instances of n = 15
 `aggregate_results.py` adds the first-level gap (bound at the children of the root vs the
 optimum, LD and LD0) and prints, per cell, the time, nodes and gap of each arm (median by
 default, `--stat mean` for the paper table), and the per-instance time ratios REF/LD and LD0/LD.
+
+`gnn_vs_subgrad/` compares, at the root of the same 120 instances, one GNN bound call with the
+subgradient method (iterations t* needed to reach the GNN bound, and their time); see its README.
